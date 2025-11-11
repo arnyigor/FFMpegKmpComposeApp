@@ -1,6 +1,5 @@
 package com.arny.ffmpegcompose.components.utils
 
-
 fun String?.toFrameRate(): Double? {
     if (this.isNullOrBlank() || this == "0/0" || this == "N/A") return null
     return try {
@@ -23,6 +22,11 @@ fun Double?.formatFps(): String = when {
 
 fun String?.toDurationSeconds(): Double? = this?.toDoubleOrNull()
 
+fun String?.toDurationLongMs(): Long? {
+    val seconds = this?.toDurationSeconds()
+    return seconds?.let { (it * 1_000_000L).toLong() }
+}
+
 fun Double?.toReadableDuration(): String {
     val sec = this ?: return "—"
     val hours = (sec / 3600).toInt()
@@ -34,6 +38,14 @@ fun Double?.toReadableDuration(): String {
     }
 }
 
+fun Long.toDurationString(): String {
+    val seconds = this / 1_000_000.0
+    val hours = (seconds / 3600).toInt()
+    val minutes = ((seconds % 3600) / 60).toInt()
+    val secs = (seconds % 60).toInt()
+    return "%02d:%02d:%02d".format(hours, minutes, secs)
+}
+
 fun Long?.toReadableSize(): String {
     if (this == null || this <= 0) return "—"
     return when {
@@ -42,11 +54,4 @@ fun Long?.toReadableSize(): String {
         this < 1_000_000_000 -> "%.1f MB".format(this / 1_048_576.0)
         else -> "%.1f GB".format(this / 1_073_741_824.0)
     }
-}
-
-fun formatBytes(bytes: Long): String = when {
-    bytes < 1024 -> "$bytes B"
-    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-    bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
-    else -> "%.2f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
 }

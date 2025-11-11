@@ -1,7 +1,40 @@
 package com.arny.ffmpegcompose.data.models
 
+import com.arny.ffmpegcompose.components.home.ConvertType
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+
+
+/**
+ * Параметры для конфигурации FFmpeg команды
+ */
+data class ConversionParams(
+    val inputFile: String,
+    val outputFile: String,
+    val audioFile: String? = null,
+    val convertType: ConvertType,
+    val replaceAudio: Boolean = false,
+    val videoCodec: VideoCodec = VideoCodec.LIBX264,
+    val audioCodec: AudioCodec = AudioCodec.AAC,
+    val preset: String = "medium",
+    val crf: Int = 23,
+    val totalDurationMs: Long = 0L
+)
+
+enum class VideoCodec(val codecName: String) {
+    COPY("copy"),
+    LIBX264("libx264"),
+    LIBX265("libx265"),
+    VP9("libvpx-vp9")
+}
+
+enum class AudioCodec(val codecName: String) {
+    COPY("copy"),
+    AAC("aac"),
+    MP3("libmp3lame"),
+    OPUS("libopus")
+}
+
 
 @Serializable
 data class MediaInfo(
@@ -64,9 +97,6 @@ data class ConversionProgress(
 ) {
     val outTimeSeconds: Double
         get() = outTimeMs / 1_000_000.0
-
-    val percentage: Double
-        get() = 0.0 // Требует знания общей длительности
 
     fun formatTime(): String {
         val seconds = outTimeSeconds

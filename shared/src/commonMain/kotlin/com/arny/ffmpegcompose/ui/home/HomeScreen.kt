@@ -1,7 +1,9 @@
 package com.arny.ffmpegcompose.ui.home
 
 import androidx.compose.desktop.ui.tooling.preview.Preview
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,9 +14,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Folder
@@ -46,6 +54,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -56,7 +66,6 @@ import com.arny.ffmpegcompose.components.home.HomeUiState
 import com.arny.ffmpegcompose.components.home.LogEntry
 import com.arny.ffmpegcompose.components.home.LogLevel
 import com.arny.ffmpegcompose.data.models.ConversionProgress
-import java.nio.file.Paths
 
 @Preview
 @Composable
@@ -65,6 +74,15 @@ fun HomeScreenPreview() {
         inputFile = "/mock/input.mp4",
         outputFile = "/mock/output.mp4",
         mediaInfo = null,
+        logs = mutableListOf<LogEntry>().apply {
+            repeat(10) {
+                add(
+                    LogEntry(
+                        message = "Mock log entry"
+                    )
+                )
+            }
+        },
         conversionProgress = ConversionProgress(),
         error = null,
         replaceAudioSelected = true,
@@ -87,16 +105,10 @@ fun HomeScreenPreview() {
         override fun onStartConversion() {
         }
 
-        override fun onTestConversion() {
-        }
-
         override fun onCancelConversion() {
         }
 
         override fun onClearLogs() {
-        }
-
-        override fun onStreamCopyToggled(checked: Boolean) {
         }
 
         override fun onAddAudioToggled(checked: Boolean) {
@@ -124,6 +136,7 @@ fun HomeContent(
     state: HomeUiState,
     callbacks: HomeCallbacks
 ) {
+    val scrollState = rememberScrollState()
     Scaffold { padding ->
         Row(
             modifier = Modifier
@@ -138,188 +151,24 @@ fun HomeContent(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Text(
-                    text = "Настройки конвертации",
-                    style = MaterialTheme.typography.titleLarge
-                )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .verticalScroll(scrollState),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        ConvertOptions(state, callbacks)
+                    }
 
-                // Input File
-                FileSelectionCard(
-                    label = "Входной файл",
-                    file = state.inputFile,
-                    onSelect = callbacks::onSelectInputFile
-                )
-
-                // Output File
-                FileSelectionCard(
-                    label = "Выходной файл",
-                    file = state.outputFile,
-                    onSelect = callbacks::onSelectOutputFile
-                )
-
-                if (state.replaceAudioSelected) {
-                    FileSelectionCard(
-                        label = "Аудио файл",
-                        file = state.audioFile,
-                        onSelect = callbacks::onSelectAudioFile
+                    VerticalScrollbar(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .fillMaxHeight(),
+                        adapter = rememberScrollbarAdapter(scrollState)
                     )
                 }
-
-                HorizontalDivider()
-
-                OptionsCard(
-                    state = state,
-                    onSelectType = callbacks::onChangeConvertType,
-                    onStreamCopyToggled = callbacks::onStreamCopyToggled,
-                    onAddAudioToggled = callbacks::onAddAudioToggled
-                )
-
-                HorizontalDivider()
-
-                // Media Info
-                Card {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "Информация о файле",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-
-                        Button(
-                            onClick = callbacks::onGetMediaInfo,
-                            enabled = !state.isProcessing && state.inputFile != null,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.Info, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Анализировать")
-                        }
-
-                        state.mediaInfo?.let { info ->
-                            HorizontalDivider()
-                            info.streams.firstOrNull { it.codecType == "video" }?.let { video ->
-                                Column {
-                                    // 🔹 Основная строка: кодек, разрешение, кадры
-                                    Text(
-                                        text = "Видео: ${video.codecName} • ${video.width ?: "?"}×${video.height ?: "?"}",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-
-                                    // 🔹 Детали: FPS, длительность, размер — из formatInfo
-                                    Text(
-                                        text = info.format.formatInfo,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-
-                                    // 🔹 Доп: аудио (если нужно)
-                                    info.streams.firstOrNull { it.codecType == "audio" }
-                                        ?.let { audio ->
-                                            Text(
-                                                text = "Аудио: ${audio.codecName} • ${audio.sampleRate ?: "?"} Hz • ${audio.channels ?: "?"} ch",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                HorizontalDivider()
-
-                // Progress
-                if (state.isProcessing) {
-                    ProgressCard(progress = state.conversionProgress)
-                }
-
-                // Actions
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = callbacks::onStartConversion,
-                        enabled = !state.isProcessing &&
-                                state.inputFile != null &&
-                                state.outputFile != null,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.PlayArrow, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Конвертировать")
-                    }
-
-                    if (state.isProcessing) {
-                        Button(
-                            onClick = callbacks::onCancelConversion,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.Close, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Отменить")
-                        }
-                    }
-                }
-
-                // Messages
-                state.error?.let { error ->
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.Error,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                            Text(
-                                text = error,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                }
-
-                state.successMessage?.let { message ->
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = message,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                }
             }
-
             // Правая панель: логи
             LogsPanel(
                 logs = state.logs,
@@ -333,22 +182,211 @@ fun HomeContent(
 }
 
 @Composable
+private fun ConvertOptions(
+    state: HomeUiState,
+    callbacks: HomeCallbacks
+) {
+    Text(
+        text = "Настройки конвертации",
+        style = MaterialTheme.typography.titleLarge
+    )
+
+    // Input File
+    FileSelectionCard(
+        label = "Входной файл",
+        file = state.inputFile,
+        enabled = !state.isProcessing,
+        onSelect = callbacks::onSelectInputFile
+    )
+
+    // Output File
+    FileSelectionCard(
+        label = "Выходной файл",
+        file = state.outputFile,
+        enabled = !state.isProcessing,
+        onSelect = callbacks::onSelectOutputFile
+    )
+
+    if (state.replaceAudioSelected) {
+        FileSelectionCard(
+            label = "Аудио файл",
+            file = state.audioFile,
+            enabled = !state.isProcessing,
+            onSelect = callbacks::onSelectAudioFile
+        )
+    }
+
+    HorizontalDivider()
+
+    OptionsCard(
+        state = state,
+        onSelectType = callbacks::onChangeConvertType,
+        onAddAudioToggled = callbacks::onAddAudioToggled
+    )
+
+    HorizontalDivider()
+
+    // Media Info
+    Card {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "Информация о файле",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Button(
+                onClick = callbacks::onGetMediaInfo,
+                enabled = !state.isProcessing && state.inputFile != null,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Info, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Анализировать")
+            }
+
+            state.mediaInfo?.let { info ->
+                HorizontalDivider()
+                info.streams.firstOrNull { it.codecType == "video" }?.let { video ->
+                    Column {
+                        // 🔹 Основная строка: кодек, разрешение, кадры
+                        Text(
+                            text = "Видео: ${video.codecName} • ${video.width ?: "?"}×${video.height ?: "?"}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        // 🔹 Детали: FPS, длительность, размер — из formatInfo
+                        Text(
+                            text = info.format.formatInfo,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // 🔹 Доп: аудио (если нужно)
+                        info.streams.firstOrNull { it.codecType == "audio" }
+                            ?.let { audio ->
+                                Text(
+                                    text = "Аудио: ${audio.codecName} • ${audio.sampleRate ?: "?"} Hz • ${audio.channels ?: "?"} ch",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                    }
+                }
+            }
+        }
+    }
+
+    HorizontalDivider()
+
+    // Progress
+    if (state.isProcessing) {
+        ProgressCard(state)
+    }
+
+    // Actions
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Button(
+            onClick = callbacks::onStartConversion,
+            enabled = !state.isProcessing &&
+                    state.inputFile != null &&
+                    state.outputFile != null,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.PlayArrow, null)
+            Spacer(Modifier.width(8.dp))
+            Text("Конвертировать")
+        }
+
+        if (state.isProcessing) {
+            Button(
+                onClick = callbacks::onCancelConversion,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Close, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Отменить")
+            }
+        }
+    }
+
+    // Messages
+    state.error?.let { error ->
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer
+            )
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Error,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+
+    state.successMessage?.let { message ->
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = message,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun OptionsCard(
     state: HomeUiState,
     onSelectType: (ConvertType) -> Unit,
-    onStreamCopyToggled: (Boolean) -> Unit,
     onAddAudioToggled: (Boolean) -> Unit,
 ) {
     Card {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
                 text = "Настройки конвертации",
                 style = MaterialTheme.typography.titleLarge
             )
-
             ConvertSelector(
                 types = ConvertType.entries,
                 selected = state.convertType.title,
@@ -357,6 +395,7 @@ fun OptionsCard(
             ToggleButton(
                 title = "Заменить аудио",
                 selected = state.replaceAudioSelected,
+                enabled = !state.isProcessing,
                 onToggle = onAddAudioToggled,
             )
         }
@@ -410,6 +449,7 @@ fun ConvertSelector(
 fun ToggleButton(
     title: String,
     selected: Boolean,
+    enabled: Boolean,
     onToggle: (Boolean) -> Unit,
 ) {
     Row(
@@ -421,6 +461,7 @@ fun ToggleButton(
             modifier = Modifier.weight(1f)
         )
         Checkbox(
+            enabled = enabled,
             checked = selected,
             onCheckedChange = onToggle
         )
@@ -431,6 +472,7 @@ fun ToggleButton(
 private fun FileSelectionCard(
     label: String,
     file: String?,
+    enabled: Boolean,
     onSelect: () -> Unit
 ) {
     Card {
@@ -444,6 +486,7 @@ private fun FileSelectionCard(
             )
 
             Button(
+                enabled = enabled,
                 onClick = onSelect,
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -464,7 +507,8 @@ private fun FileSelectionCard(
 }
 
 @Composable
-private fun ProgressCard(progress: ConversionProgress?) {
+private fun ProgressCard(state: HomeUiState) {
+    val progress = state.conversionProgress
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer
@@ -511,6 +555,23 @@ private fun ProgressCard(progress: ConversionProgress?) {
                     text = "Размер: ${progress.formatSize()}",
                     style = MaterialTheme.typography.bodySmall
                 )
+
+                val totalDurationMs = state.totalDurationMs
+                val outTimeMicros = progress.outTimeMs
+                val remainingTimeMs = totalDurationMs - outTimeMicros
+                val remainingSeconds = remainingTimeMs / 1_000_000.0
+                Text(
+                    text = "Осталось: ${remainingSeconds}s",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                val percentage = if (totalDurationMs > 0) {
+                    (outTimeMicros.toDouble() / totalDurationMs) * 100.0
+                } else 0.0
+                Text(
+                    text = "Процент: ${percentage.toInt()}%",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
     }
@@ -522,6 +583,9 @@ private fun LogsPanel(
     onClear: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val clipboardManager = LocalClipboardManager.current
+    val lazyListState = rememberLazyListState()
+
     Card(modifier = modifier.padding(16.dp)) {
         Column(modifier = Modifier.fillMaxSize()) {
             Row(
@@ -535,22 +599,53 @@ private fun LogsPanel(
                     text = "Консоль (${logs.size})",
                     style = MaterialTheme.typography.titleMedium
                 )
-                IconButton(onClick = onClear) {
-                    Icon(Icons.Default.Delete, "Очистить")
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Кнопка "Копировать все"
+                    IconButton(
+                        onClick = {
+                            val allLogsText = logs.joinToString(separator = "\n") { log ->
+                                "[${log.level.name}] ${log.message}"
+                            }
+                            clipboardManager.setText(AnnotatedString(allLogsText))
+                        }
+                    ) {
+                        Icon(Icons.Default.ContentCopy, "Копировать все")
+                    }
+
+                    IconButton(onClick = onClear) {
+                        Icon(Icons.Default.Delete, "Очистить")
+                    }
                 }
             }
 
             HorizontalDivider()
 
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
-                reverseLayout = true
-            ) {
-                items(logs.asReversed()) { log ->
-                    LogEntryItem(log)
+            Box {
+                LazyColumn(
+                    state = lazyListState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    reverseLayout = true
+                ) {
+                    items(
+                        items = logs.asReversed(),
+                        key = { it.id }
+                    ) { log ->
+                        SelectionContainer {
+                            LogEntryItem(log)
+                        }
+                    }
                 }
+
+                VerticalScrollbar(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .padding(end = 4.dp),
+                    adapter = rememberScrollbarAdapter(lazyListState)
+                )
             }
         }
     }
