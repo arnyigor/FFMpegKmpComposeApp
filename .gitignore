@@ -1,0 +1,94 @@
+#########################################
+# Kotlin Multiplatform Project
+#########################################
+
+# Gradle
+.gradle/
+build/
+*/build/
+buildSrc/build/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+gradle.properties.local
+.kotlin
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+
+#########################################
+# IDE Settings
+#########################################
+
+# IntelliJ IDEA - персональные настройки
+.idea/
+
+# НЕ игнорируем полезные командные настройки:
+# .idea/codeStyles/
+# .idea/inspectionProfiles/
+# .idea/modules.xml
+# .idea/.name
+# .idea/compiler.xml
+# .idea/runConfigurations/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Eclipse
+.project
+.metadata
+bin/
+tmp/
+*.tmp
+*.bak
+*.swp
+*~.nib
+local.properties
+.classpath
+.settings/
+.loadpath
+.recommenders
+
+#########################################
+# Android Specific
+#########################################
+
+# Android Studio
+*.iml
+.externalNativeBuild
+.cxx/
+local.properties
+
+# Android Build
+/captures/
+.navigation/
+*.ap_
+*.aab
+
+# Android Keystore
+*.jks
+*.keystore
+keystore.properties
+
+# Android Lint
+lint/outputs/
+lint/tmp/
+lint-results*.xml
+
+# Google Services
+google-services.json
+GoogleService-Info.plist
+
+# Android NDK
+obj/
+.cxx/
+
+#########################################
+# iOS/macOS Specific
+#########################################
