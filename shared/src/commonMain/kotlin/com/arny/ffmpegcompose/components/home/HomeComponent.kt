@@ -13,6 +13,7 @@ import com.arny.ffmpegcompose.data.models.AudioCodec
 import com.arny.ffmpegcompose.data.models.ConversionParams
 import com.arny.ffmpegcompose.data.models.ConversionProgress
 import com.arny.ffmpegcompose.data.models.MediaInfo
+import com.arny.ffmpegcompose.data.models.TrimStrategy
 import com.arny.ffmpegcompose.data.models.VideoCodec
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,8 +21,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.awt.Desktop
 import java.awt.FileDialog
 import java.awt.Frame
+import java.io.File
 import java.nio.file.Paths
 import java.util.UUID
 import kotlin.io.path.absolutePathString
@@ -30,6 +33,22 @@ import kotlin.math.abs
 
 interface HomeComponent : HomeCallbacks {
     val state: StateFlow<HomeUiState>
+}
+
+object EmptyHomeCallbacks : HomeCallbacks {
+    override fun onSelectInputFile() {}
+    override fun onSelectOutputFile() {}
+    override fun onSelectAudioFile() {}
+    override fun onGetMediaInfo() {}
+    override fun onStartConversion() {}
+    override fun onCancelConversion() {}
+    override fun onClearLogs() {}
+    override fun onAddAudioToggled(checked: Boolean) {}
+    override fun onTrimToggled(checked: Boolean) {}
+    override fun onChangeConvertType(type: ConvertType) {}
+    override fun onTrimEndChange(trimEnd: Long?) {}
+    override fun onTrimStartChange(startMs: Long?) {}
+    override fun onTrimStrategyChange(trimStrategy: TrimStrategy) {}
 }
 
 interface HomeCallbacks {
@@ -41,7 +60,11 @@ interface HomeCallbacks {
     fun onCancelConversion()
     fun onClearLogs()
     fun onAddAudioToggled(checked: Boolean)
+    fun onTrimToggled(checked: Boolean)
     fun onChangeConvertType(type: ConvertType)
+    fun onTrimStartChange(startMs: Long?)
+    fun onTrimEndChange(trimEnd: Long?)
+    fun onTrimStrategyChange(trimStrategy: TrimStrategy)
 }
 
 data class HomeUiState(
@@ -51,13 +74,22 @@ data class HomeUiState(
     val audioFile: String? = null,
     val replaceAudioSelected: Boolean = false,
     val streamCopySelected: Boolean = false,
+    val trimSelected: Boolean = false,
     val mediaInfo: MediaInfo? = null,
     val conversionProgress: ConversionProgress? = null,
     val isProcessing: Boolean = false,
     val logs: List<LogEntry> = emptyList(),
     val error: String? = null,
     val successMessage: String? = null,
-    val totalDurationMs: Long = 0L
+    val totalDurationMs: Long = 0L,
+    val trimParams: TrimParams = TrimParams(),
+)
+
+data class TrimParams(
+    val trimStartMs: Long? = null,
+    val trimEndMs: Long? = null,
+    val trimStrategy: TrimStrategy = TrimStrategy.AUTO,
+    val totalDurationMs: Long = 0,
 )
 
 enum class ConvertType(
@@ -102,6 +134,14 @@ class DefaultHomeComponent(
         )
     }
 
+    override fun onTrimToggled(checked: Boolean) {
+        _state.update { it.copy(trimSelected = checked) }
+        addLog(
+            if (checked) "Обрезка включена" else "Обрезка отключена",
+            LogLevel.INFO
+        )
+    }
+
     override fun onSelectInputFile() {
         val fileDialog = FileDialog(null as Frame?, "Выберите видео файл", FileDialog.LOAD)
         fileDialog.file = "*.mp4;*.avi;*.mkv;*.mov;*.webm"
@@ -117,16 +157,23 @@ class DefaultHomeComponent(
         }
     }
 
+    fun onOpenFolder(filePath: String) {
+        val file = File(filePath)
+        val folder = if (file.isDirectory) file else file.parentFile
+
+        Desktop.getDesktop().open(folder)
+    }
+
     override fun onSelectOutputFile() {
         val fileDialog = FileDialog(null as Frame?, "Сохранить как", FileDialog.SAVE)
         fileDialog.file = "output.mp4"
         fileDialog.isVisible = true
 
         val directory = fileDialog.directory
-        val file = fileDialog.file
+        val fileName = fileDialog.file
 
-        if (directory != null && file != null) {
-            val paths = Paths.get(directory, file)
+        if (directory != null && fileName != null) {
+            val paths = Paths.get(directory, replaceDotsWithUnderscores(fileName))
             var outputFile = paths.absolutePathString()
             if (paths.extension.isEmpty()) {
                 outputFile += ".mp4"
@@ -135,6 +182,8 @@ class DefaultHomeComponent(
             addLog("Выбран выходной файл: $outputFile", LogLevel.INFO)
         }
     }
+
+    fun replaceDotsWithUnderscores(fileName: String): String = fileName.replace(".", "_")
 
     override fun onSelectAudioFile() {
         val fileDialog = FileDialog(null as Frame?, "Выберите аудио файл", FileDialog.LOAD)
@@ -283,15 +332,16 @@ class DefaultHomeComponent(
                 }
             )
 
-            result.onSuccess { message ->
+            result.onSuccess { filePath ->
                 _state.update {
                     it.copy(
                         isProcessing = false,
-                        successMessage = message
+                        successMessage = "Конвертация завершена $filePath"
                     )
                 }
                 addLog("=== КОНВЕРТАЦИЯ ЗАВЕРШЕНА ===", LogLevel.SUCCESS)
-                addLog(message, LogLevel.SUCCESS)
+                addLog(filePath, LogLevel.SUCCESS)
+                onOpenFolder(filePath)
             }.onFailure { error ->
                 error.printStackTrace()
                 _state.update {
@@ -374,6 +424,39 @@ class DefaultHomeComponent(
             val newLog = LogEntry(message = message, level = level)
             state.copy(logs = (state.logs + newLog).takeLast(200))
         }
+    }
+
+    override fun onTrimEndChange(trimEnd: Long?) {
+        _state.update {
+            it.copy(
+                trimParams = it.trimParams.copy(
+                    trimEndMs = trimEnd
+                )
+            )
+        }
+        addLog("Изменили конец обрезки на $trimEnd ms", LogLevel.INFO)
+    }
+
+    override fun onTrimStartChange(startMs: Long?) {
+        _state.update {
+            it.copy(
+                trimParams = it.trimParams.copy(
+                    trimStartMs = startMs
+                )
+            )
+        }
+        addLog("Изменили начало обрезки на $startMs", LogLevel.INFO)
+    }
+
+    override fun onTrimStrategyChange(trimStrategy: TrimStrategy) {
+        _state.update {
+            it.copy(
+                trimParams = it.trimParams.copy(
+                    trimStrategy = trimStrategy
+                )
+            )
+        }
+        addLog("Изменили стратегию обрезки на $trimStrategy", LogLevel.INFO)
     }
 }
 

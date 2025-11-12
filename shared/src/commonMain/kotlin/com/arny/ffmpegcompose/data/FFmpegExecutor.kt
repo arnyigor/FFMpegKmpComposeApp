@@ -6,6 +6,7 @@ import com.arny.ffmpegcompose.data.models.AudioCodec
 import com.arny.ffmpegcompose.data.models.ConversionParams
 import com.arny.ffmpegcompose.data.models.ConversionProgress
 import com.arny.ffmpegcompose.data.models.MediaInfo
+import com.arny.ffmpegcompose.data.models.TrimStrategy
 import com.arny.ffmpegcompose.data.models.VideoCodec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -123,7 +124,7 @@ class FFmpegExecutor(
             currentProcess = null
 
             if (exitCode == 0) {
-                Result.success("Конвертация завершена: ${params.outputFile}")
+                Result.success(params.outputFile)
             } else {
                 Result.failure(Exception("FFmpeg завершился с кодом $exitCode"))
             }
@@ -138,92 +139,119 @@ class FFmpegExecutor(
     /**
      * Построение команды FFmpeg в зависимости от параметров
      */
-    private fun buildFFmpegCommand(params: ConversionParams): List<String> {
-        return buildList {
-            add(configManager.getFfmpegPath().toString())
+    private fun buildFFmpegCommand(params: ConversionParams): List<String> = buildList {
+        add(configManager.getFfmpegPath().toString())
 
-            // === ВХОДНЫЕ ФАЙЛЫ ===
-            add("-i")
-            add(params.inputFile)
+        // Определяем эффективную стратегию
+        val effectiveStrategy = params.getEffectiveTrimStrategy()
 
-            // Если заменяем аудио - добавляем второй вход
-            if (params.replaceAudio && params.audioFile != null) {
-                add("-i")
-                add(params.audioFile)
+        // ========== FAST SEEKING (до -i) ==========
+        // Применяется для FAST стратегии
+        // Преимущество: очень быстро
+        // Недостаток: точность только до ближайшего keyframe
+        if (params.shouldTrim() && effectiveStrategy == TrimStrategy.FAST) {
+            params.trimStartMs?.let { startMs ->
+                add("-ss")
+                add(params.formatTimeMs(startMs))
             }
-
-            // === ПРОГРЕСС И СТАТИСТИКА ===
-            add("-progress")
-            add("-")        // Прогресс в stdout (key=value)
-            add("-nostats")  // Отключаем статистику в stderr
-
-            // === РЕЖИМ КОНВЕРТАЦИИ ===
-            when (params.convertType) {
-                ConvertType.STREAM_COPY -> {
-                    // Прямопотоковое копирование
-                    if (params.replaceAudio && params.audioFile != null) {
-                        // Копируем видео, перекодируем аудио
-                        add("-map")
-                        add("0:v")  // Видео из первого входа
-                        add("-map")
-                        add("1:a")  // Аудио из второго входа
-                        add("-c:v")
-                        add(VideoCodec.COPY.codecName)
-                        add("-c:a")
-                        add(params.audioCodec.codecName)
-                    } else {
-                        // Копируем всё как есть
-                        add("-c")
-                        add("copy")
-                    }
-                }
-
-                ConvertType.CONVERT -> {
-                    // Полная конвертация
-                    if (params.replaceAudio && params.audioFile != null) {
-                        // Карта потоков: видео из первого, аудио из второго
-                        add("-map")
-                        add("0:v")
-                        add("-map")
-                        add("1:a")
-                    }
-
-                    // Видео кодек
-                    add("-c:v")
-                    add(params.videoCodec.codecName)
-
-                    // Настройки для libx264/libx265
-                    if (params.videoCodec in listOf(VideoCodec.LIBX264, VideoCodec.LIBX265)) {
-                        add("-preset")
-                        add(params.preset)
-                        add("-crf")
-                        add(params.crf.toString())
-                    }
-
-                    // Аудио кодек
-                    add("-c:a")
-                    add(params.audioCodec.codecName)
-
-                    // Битрейт для AAC
-                    if (params.audioCodec == AudioCodec.AAC) {
-                        add("-b:a")
-                        add("192k")
-                    }
-                }
-            }
-
-            // === ДОПОЛНИТЕЛЬНЫЕ ОПЦИИ ===
-            // Если заменяем аудио, обрезаем по длине видео
-            if (params.replaceAudio && params.audioFile != null) {
-                add("-shortest")
-            }
-
-            // Перезапись выходного файла
-            add("-y")
-
-            // Выходной файл
-            add(params.outputFile)
         }
+
+        // ========== ВХОДНЫЕ ФАЙЛЫ ==========
+        add("-i")
+        add(params.inputFile)
+
+        if (params.replaceAudio && params.audioFile != null) {
+            add("-i")
+            add(params.audioFile)
+        }
+
+        // ========== ACCURATE SEEKING (после -i) ==========
+        // Применяется для ACCURATE стратегии
+        // Преимущество: точность до кадра
+        // Недостаток: медленнее, т.к. декодирует до нужной позиции
+        if (params.shouldTrim() && effectiveStrategy == TrimStrategy.ACCURATE) {
+            params.trimStartMs?.let { startMs ->
+                add("-ss")
+                add(params.formatTimeMs(startMs))
+            }
+        }
+
+        // ========== ОБРЕЗКА: КОНЕЧНАЯ ТОЧКА ==========
+        // Вычисляем длительность или конечное время
+        if (params.shouldTrim()) {
+            when {
+                // Если заданы обе границы - используем длительность
+                params.trimStartMs != null && params.trimEndMs != null -> {
+                    val duration = params.trimEndMs - params.trimStartMs
+                    add("-t")
+                    add(params.formatTimeMs(duration))
+                }
+                // Если только конец - используем -to
+                params.trimEndMs != null -> {
+                    add("-to")
+                    add(params.formatTimeMs(params.trimEndMs))
+                }
+                // Если только начало - обрезаем до конца файла (ничего не добавляем)
+            }
+        }
+
+        // ========== ПРОГРЕСС И СТАТИСТИКА ==========
+        add("-progress")
+        add("-")
+        add("-nostats")
+
+        // ========== РЕЖИМ КОНВЕРТАЦИИ ==========
+        when (params.convertType) {
+            ConvertType.STREAM_COPY -> {
+                if (params.replaceAudio && params.audioFile != null) {
+                    add("-map"); add("0:v")
+                    add("-map"); add("1:a")
+                    add("-c:v"); add(VideoCodec.COPY.codecName)
+                    add("-c:a"); add(params.audioCodec.codecName)
+                } else {
+                    add("-c")
+                    add("copy")
+                }
+            }
+
+            ConvertType.CONVERT -> {
+                if (params.replaceAudio && params.audioFile != null) {
+                    add("-map"); add("0:v")
+                    add("-map"); add("1:a")
+                }
+
+                // Видео кодек
+                add("-c:v")
+                add(params.videoCodec.codecName)
+
+                if (params.videoCodec in listOf(VideoCodec.LIBX264, VideoCodec.LIBX265)) {
+                    add("-preset")
+                    add(params.preset)
+                    add("-crf")
+                    add(params.crf.toString())
+                }
+
+                // Аудио кодек
+                add("-c:a")
+                add(params.audioCodec.codecName)
+
+                if (params.audioCodec == AudioCodec.AAC) {
+                    add("-b:a")
+                    add("192k")
+                }
+            }
+        }
+
+        // ========== ДОПОЛНИТЕЛЬНЫЕ ОПЦИИ ==========
+        if (params.replaceAudio && params.audioFile != null) {
+            add("-shortest")
+        }
+
+        // Перезапись выходного файла
+        add("-y")
+
+        // Выходной файл
+        add(params.outputFile)
     }
 
     /**

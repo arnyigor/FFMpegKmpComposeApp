@@ -23,6 +23,7 @@ ksp = "2.2.0-2.0.2"
 room = "2.8.3"
 sqlite-bundled = "2.6.1"
 lifecycle-coroutines ="2.5.0"
+inputmask = "0.0.7"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -71,6 +72,9 @@ koin-androidx-compose = { group = "io.insert-koin", name = "koin-androidx-compos
 # --- Android ---
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+
+inputmask-core = { module = "io.github.skeptick.inputmask:inputmask-core", version.ref = "inputmask" }
+inputmask-compose = { module = "io.github.skeptick.inputmask:inputmask-compose", version.ref = "inputmask" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }

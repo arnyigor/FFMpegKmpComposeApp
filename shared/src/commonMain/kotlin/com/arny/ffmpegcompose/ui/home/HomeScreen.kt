@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,6 +18,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -44,6 +47,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,14 +62,32 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.arny.ffmpegcompose.components.home.ConvertType
+import com.arny.ffmpegcompose.components.home.EmptyHomeCallbacks
 import com.arny.ffmpegcompose.components.home.HomeCallbacks
 import com.arny.ffmpegcompose.components.home.HomeComponent
 import com.arny.ffmpegcompose.components.home.HomeUiState
 import com.arny.ffmpegcompose.components.home.LogEntry
 import com.arny.ffmpegcompose.components.home.LogLevel
+import com.arny.ffmpegcompose.data.TimeUtils
 import com.arny.ffmpegcompose.data.models.ConversionProgress
+import com.arny.ffmpegcompose.data.models.TrimStrategy
+import io.github.skeptick.inputmask.compose.rememberInputMaskVisualTransformation
+
+@Preview
+@Composable
+private fun TrimSectionPreview() {
+    val state = HomeUiState()
+    TrimSection(
+        state,
+        onTrimStartChange = {},
+        onTrimEndChange = {},
+        onTrimStrategyChange = {}
+    )
+}
 
 @Preview
 @Composable
@@ -85,39 +107,10 @@ fun HomeScreenPreview() {
         },
         conversionProgress = ConversionProgress(),
         error = null,
-        replaceAudioSelected = true,
+        replaceAudioSelected = false,
         audioFile = "audio.mp3"
     )
-    HomeContent(state, object : HomeCallbacks {
-        override fun onSelectInputFile() {
-        }
-
-        override fun onSelectOutputFile() {
-        }
-
-        override fun onSelectAudioFile() {
-
-        }
-
-        override fun onGetMediaInfo() {
-        }
-
-        override fun onStartConversion() {
-        }
-
-        override fun onCancelConversion() {
-        }
-
-        override fun onClearLogs() {
-        }
-
-        override fun onAddAudioToggled(checked: Boolean) {
-
-        }
-
-        override fun onChangeConvertType(type: ConvertType) {
-        }
-    })
+    HomeContent(state, EmptyHomeCallbacks)
 }
 
 @Composable
@@ -221,8 +214,20 @@ private fun ConvertOptions(
     OptionsCard(
         state = state,
         onSelectType = callbacks::onChangeConvertType,
-        onAddAudioToggled = callbacks::onAddAudioToggled
+        onAddAudioToggled = callbacks::onAddAudioToggled,
+        onTrimToggled = callbacks::onTrimToggled,
     )
+
+    HorizontalDivider()
+
+    if (state.trimSelected) {
+        TrimSection(
+            state = state,
+            onTrimStartChange = callbacks::onTrimStartChange,
+            onTrimEndChange = callbacks::onTrimEndChange,
+            onTrimStrategyChange = callbacks::onTrimStrategyChange,
+        )
+    }
 
     HorizontalDivider()
 
@@ -371,10 +376,134 @@ private fun ConvertOptions(
 }
 
 @Composable
+fun TrimSection(
+    state: HomeUiState,
+    onTrimStartChange: (Long?) -> Unit,
+    onTrimEndChange: (Long?) -> Unit,
+    onTrimStrategyChange: (TrimStrategy) -> Unit
+) {
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "Обрезка видео",
+            style = MaterialTheme.typography.titleMedium
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        TimeInputWithLibrary(
+            modifier = Modifier.fillMaxWidth(),
+            value = "",
+            onTimeChange = onTrimStartChange
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        TimeInputWithLibrary(
+            modifier = Modifier.fillMaxWidth(),
+            value = "",
+            onTimeChange = onTrimEndChange
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Стратегия обрезки
+        Text(
+            text = "Режим обрезки",
+            style = MaterialTheme.typography.bodyMedium
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        TrimStrategy.entries.forEach { strategy ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .selectable(
+                        selected = (strategy == state.trimParams.trimStrategy),
+                        onClick = { onTrimStrategyChange(strategy) }
+                    )
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RadioButton(
+                    selected = (strategy == state.trimParams?.trimStrategy),
+                    onClick = { onTrimStrategyChange(strategy) }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(
+                        text = when (strategy) {
+                            TrimStrategy.AUTO -> "Авто (рекомендуется)"
+                            TrimStrategy.FAST -> "Быстрый"
+                            TrimStrategy.ACCURATE -> "Точный"
+                        },
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = when (strategy) {
+                            TrimStrategy.AUTO -> "Оптимальный выбор"
+                            TrimStrategy.FAST -> "⚡ Мгновенно, точность ±1-2 сек"
+                            TrimStrategy.ACCURATE -> "🎯 Кадр в кадр, медленнее"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TimeInputWithLibrary(
+    modifier: Modifier = Modifier,
+    value: String,
+    onTimeChange: (Long?) -> Unit,
+) {
+    var text by remember { mutableStateOf(value.replace(":", "")) }
+    val visualTransformation = rememberInputMaskVisualTransformation("[00]:[00]:[00]")
+
+    OutlinedTextField(
+        value = text,
+        onValueChange = { input ->
+            text = visualTransformation.sanitize(input)
+
+            // Проверяем, что введено 6 цифр
+            val digits = text.filter { it.isDigit() }
+            if (digits.length == 6) {
+                val formatted =
+                    "${digits.take(2)}:${digits.substring(2, 4)}:${digits.substring(4, 6)}"
+                try {
+                    val ms = TimeUtils.parseToMs(formatted)
+                    onTimeChange(ms)
+                } catch (e: Exception) {
+                    onTimeChange(null)
+                }
+            } else if (digits.isEmpty()) {
+                onTimeChange(null)
+            }
+        },
+        label = { Text("Начало (HH:MM:SS)") },
+        placeholder = { Text("00:00:00") },
+        visualTransformation = visualTransformation,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Number,
+            imeAction = ImeAction.Done
+        ),
+        modifier = modifier.fillMaxWidth()
+    )
+}
+
+@Composable
 fun OptionsCard(
     state: HomeUiState,
     onSelectType: (ConvertType) -> Unit,
     onAddAudioToggled: (Boolean) -> Unit,
+    onTrimToggled: (Boolean) -> Unit,
 ) {
     Card {
         Column(
@@ -397,6 +526,12 @@ fun OptionsCard(
                 selected = state.replaceAudioSelected,
                 enabled = !state.isProcessing,
                 onToggle = onAddAudioToggled,
+            )
+            ToggleButton(
+                title = "Обрезать",
+                selected = state.trimSelected,
+                enabled = !state.isProcessing,
+                onToggle = onTrimToggled,
             )
         }
     }

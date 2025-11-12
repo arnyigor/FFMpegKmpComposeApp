@@ -40,6 +40,8 @@ kotlin {
                 api(libs.sqlite.bundled)
                 api(libs.koin.core)
                 implementation(libs.compose.markdown.render.m3)
+                implementation(libs.inputmask.core)
+                implementation(libs.inputmask.compose)
             }
         }
 
