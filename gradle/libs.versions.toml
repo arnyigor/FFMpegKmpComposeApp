@@ -9,6 +9,7 @@ androidx-core = "1.17.0"
 androidx-lifecycle = "2.9.6"
 kotlin = "2.2.0"  # ✅ Обновлено
 compose = "1.8.2"
+desktop-preview = "1.9.3"
 icons = "1.7.3"
 koin = "4.1.1"
 kotlinx-coroutines = "1.10.2"
@@ -41,7 +42,7 @@ compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", v
 compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose" }
 compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose" }
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose" }
-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview", version = "compose" }
+compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview-desktop", version = "desktop-preview" }
 compose-material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "icons" }
 
 # --- ROOM ---

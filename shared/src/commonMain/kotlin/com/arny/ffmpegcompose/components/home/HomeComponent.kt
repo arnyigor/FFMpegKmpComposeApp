@@ -2,19 +2,9 @@ package com.arny.ffmpegcompose.components.home
 
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.coroutines.coroutineScope
-import com.arny.ffmpegcompose.components.utils.formatFps
-import com.arny.ffmpegcompose.components.utils.toDurationLongMs
-import com.arny.ffmpegcompose.components.utils.toDurationSeconds
-import com.arny.ffmpegcompose.components.utils.toFrameRate
-import com.arny.ffmpegcompose.components.utils.toReadableDuration
-import com.arny.ffmpegcompose.components.utils.toReadableSize
+import com.arny.ffmpegcompose.components.utils.*
 import com.arny.ffmpegcompose.data.FFmpegExecutor
-import com.arny.ffmpegcompose.data.models.AudioCodec
-import com.arny.ffmpegcompose.data.models.ConversionParams
-import com.arny.ffmpegcompose.data.models.ConversionProgress
-import com.arny.ffmpegcompose.data.models.MediaInfo
-import com.arny.ffmpegcompose.data.models.TrimStrategy
-import com.arny.ffmpegcompose.data.models.VideoCodec
+import com.arny.ffmpegcompose.data.models.*
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,7 +16,7 @@ import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
 import java.nio.file.Paths
-import java.util.UUID
+import java.util.*
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.extension
 import kotlin.math.abs
@@ -43,6 +33,7 @@ object EmptyHomeCallbacks : HomeCallbacks {
     override fun onStartConversion() {}
     override fun onCancelConversion() {}
     override fun onClearLogs() {}
+    override fun onOpenOutputFolder() {}
     override fun onAddAudioToggled(checked: Boolean) {}
     override fun onTrimToggled(checked: Boolean) {}
     override fun onChangeConvertType(type: ConvertType) {}
@@ -59,6 +50,7 @@ interface HomeCallbacks {
     fun onStartConversion()
     fun onCancelConversion()
     fun onClearLogs()
+    fun onOpenOutputFolder()
     fun onAddAudioToggled(checked: Boolean)
     fun onTrimToggled(checked: Boolean)
     fun onChangeConvertType(type: ConvertType)
@@ -97,6 +89,7 @@ enum class ConvertType(
 ) {
     STREAM_COPY("Прямопотоковое копирование"),
     CONVERT("Конвертация"),
+    AUDIO_EXTRACT("Извлечь аудио"),
 }
 
 data class LogEntry(
@@ -159,14 +152,27 @@ class DefaultHomeComponent(
 
     fun onOpenFolder(filePath: String) {
         val file = File(filePath)
-        val folder = if (file.isDirectory) file else file.parentFile
+        // Проверяем существование переданного пути (опционально – можно убрать)
+        require(file.exists()) { "Путь '$filePath' не найден" }
 
+        val folder = when {
+            file.isDirectory -> file
+            else -> requireNotNull(file.parentFile) {
+                "У файла '$filePath' отсутствует родительская директория"
+            }
+        }
         Desktop.getDesktop().open(folder)
     }
 
     override fun onSelectOutputFile() {
         val fileDialog = FileDialog(null as Frame?, "Сохранить как", FileDialog.SAVE)
-        fileDialog.file = "output.mp4"
+        val extension = when (_state.value.convertType) {
+            ConvertType.STREAM_COPY -> ".mp4"
+            ConvertType.CONVERT -> ".mp4"
+            ConvertType.AUDIO_EXTRACT -> ".mp3"
+        }
+
+        fileDialog.file = "output$extension"
         fileDialog.isVisible = true
 
         val directory = fileDialog.directory
@@ -176,7 +182,7 @@ class DefaultHomeComponent(
             val paths = Paths.get(directory, replaceDotsWithUnderscores(fileName))
             var outputFile = paths.absolutePathString()
             if (paths.extension.isEmpty()) {
-                outputFile += ".mp4"
+                outputFile += extension
             }
             _state.update { it.copy(outputFile = outputFile) }
             addLog("Выбран выходной файл: $outputFile", LogLevel.INFO)
@@ -304,17 +310,14 @@ class DefaultHomeComponent(
                 audioFile = currentState.audioFile,
                 convertType = currentState.convertType,
                 replaceAudio = currentState.replaceAudioSelected,
-                videoCodec = if (currentState.convertType == ConvertType.STREAM_COPY) {
-                    VideoCodec.COPY
-                } else {
-                    VideoCodec.LIBX264
+                videoCodec = when (currentState.convertType) {
+                    ConvertType.STREAM_COPY, ConvertType.AUDIO_EXTRACT -> VideoCodec.COPY
+                    else -> VideoCodec.LIBX264
                 },
-                audioCodec = if (currentState.convertType == ConvertType.STREAM_COPY &&
-                    !currentState.replaceAudioSelected
-                ) {
-                    AudioCodec.COPY
-                } else {
-                    AudioCodec.AAC
+                audioCodec = when (currentState.convertType) {
+                    ConvertType.STREAM_COPY if !currentState.replaceAudioSelected -> AudioCodec.COPY
+                    ConvertType.AUDIO_EXTRACT -> AudioCodec.MP3
+                    else -> AudioCodec.AAC
                 },
                 preset = "medium",
                 crf = 23
@@ -369,6 +372,10 @@ class DefaultHomeComponent(
 
     override fun onClearLogs() {
         _state.update { it.copy(logs = emptyList()) }
+    }
+
+    override fun onOpenOutputFolder() {
+        onOpenFolder(_state.value.outputFile.orEmpty())
     }
 
     private fun enrichMediaInfo(mediaInfo: MediaInfo): MediaInfo {

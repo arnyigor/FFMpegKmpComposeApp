@@ -109,6 +109,7 @@ data class ConversionParams(
                 when (convertType) {
                     ConvertType.STREAM_COPY -> TrimStrategy.FAST
                     ConvertType.CONVERT -> TrimStrategy.ACCURATE
+                    ConvertType.AUDIO_EXTRACT -> TrimStrategy.ACCURATE
                 }
             }
             else -> trimStrategy

@@ -42,6 +42,7 @@ kotlin {
                 implementation(libs.compose.markdown.render.m3)
                 implementation(libs.inputmask.core)
                 implementation(libs.inputmask.compose)
+                implementation(libs.compose.ui.tooling.preview)
             }
         }
 

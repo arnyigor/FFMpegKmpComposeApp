@@ -240,6 +240,12 @@ class FFmpegExecutor(
                     add("192k")
                 }
             }
+
+            ConvertType.AUDIO_EXTRACT -> {
+                add("-vn")
+                add("-acodec")
+                add(params.audioCodec.codecName)
+            }
         }
 
         // ========== ДОПОЛНИТЕЛЬНЫЕ ОПЦИИ ==========
