@@ -151,17 +151,21 @@ class DefaultHomeComponent(
     }
 
     fun onOpenFolder(filePath: String) {
-        val file = File(filePath)
-        // Проверяем существование переданного пути (опционально – можно убрать)
-        require(file.exists()) { "Путь '$filePath' не найден" }
+        try {
+            val file = File(filePath)
+            // Проверяем существование переданного пути (опционально – можно убрать)
+            require(file.exists()) { "Путь '$filePath' не найден" }
 
-        val folder = when {
-            file.isDirectory -> file
-            else -> requireNotNull(file.parentFile) {
-                "У файла '$filePath' отсутствует родительская директория"
+            val folder = when {
+                file.isDirectory -> file
+                else -> requireNotNull(file.parentFile) {
+                    "У файла '$filePath' отсутствует родительская директория"
+                }
             }
+            Desktop.getDesktop().open(folder)
+        } catch (e: Exception) {
+            _state.update { it.copy(error = e.message) }
         }
-        Desktop.getDesktop().open(folder)
     }
 
     override fun onSelectOutputFile() {
@@ -169,7 +173,7 @@ class DefaultHomeComponent(
         val extension = when (_state.value.convertType) {
             ConvertType.STREAM_COPY -> ".mp4"
             ConvertType.CONVERT -> ".mp4"
-            ConvertType.AUDIO_EXTRACT -> ".mp3"
+            ConvertType.AUDIO_EXTRACT -> ".wav" // сделать опциональным
         }
 
         fileDialog.file = "output$extension"
@@ -316,10 +320,13 @@ class DefaultHomeComponent(
                 },
                 audioCodec = when (currentState.convertType) {
                     ConvertType.STREAM_COPY if !currentState.replaceAudioSelected -> AudioCodec.COPY
-                    ConvertType.AUDIO_EXTRACT -> AudioCodec.MP3
+                    ConvertType.AUDIO_EXTRACT -> AudioCodec.WAV
                     else -> AudioCodec.AAC
                 },
                 preset = "medium",
+                trimStartMs = currentState.trimParams.trimStartMs,
+                trimEndMs = currentState.trimParams.trimEndMs,
+                trimStrategy = currentState.trimParams.trimStrategy,
                 crf = 23
             )
 
@@ -427,6 +434,7 @@ class DefaultHomeComponent(
     }
 
     private fun addLog(message: String, level: LogLevel) {
+        println(message)
         _state.update { state ->
             val newLog = LogEntry(message = message, level = level)
             state.copy(logs = (state.logs + newLog).takeLast(200))

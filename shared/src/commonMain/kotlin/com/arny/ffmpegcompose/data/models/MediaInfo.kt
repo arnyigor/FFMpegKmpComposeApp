@@ -75,18 +75,6 @@ data class ConversionParams(
     fun shouldTrim(): Boolean = trimStartMs != null || trimEndMs != null
 
     /**
-     * Вычисляет длительность обрезанного фрагмента в миллисекундах
-     * Возвращает null если невозможно вычислить
-     */
-    fun getTrimDurationMs(): Long? {
-        return when {
-            trimStartMs != null && trimEndMs != null -> trimEndMs - trimStartMs
-            trimEndMs != null -> trimEndMs
-            else -> null
-        }
-    }
-
-    /**
      * Форматирует миллисекунды в FFmpeg формат HH:MM:SS.mmm
      */
     fun formatTimeMs(timeMs: Long): String {
@@ -128,7 +116,8 @@ enum class AudioCodec(val codecName: String) {
     COPY("copy"),
     AAC("aac"),
     MP3("libmp3lame"),
-    OPUS("libopus")
+    OPUS("libopus"),
+    WAV("pcm_s16le"),
 }
 
 @Serializable

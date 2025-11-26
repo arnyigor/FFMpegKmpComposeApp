@@ -59,7 +59,7 @@ fun HomeScreenPreview() {
         conversionProgress = ConversionProgress(),
         error = null,
         replaceAudioSelected = false,
-        audioFile = "audio.mp3"
+        audioFile = "audio.wav"
     )
     HomeContent(state, EmptyHomeCallbacks)
 }

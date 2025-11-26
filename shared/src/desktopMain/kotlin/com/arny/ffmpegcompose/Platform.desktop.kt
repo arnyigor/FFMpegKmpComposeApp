@@ -1,8 +1,63 @@
 package com.arny.ffmpegcompose
 
+import com.arny.ffmpegcompose.util.ProcessResult
 import java.awt.GraphicsEnvironment
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import javax.swing.JOptionPane
 import java.util.UUID
+import java.util.concurrent.TimeUnit
+
+/**
+ * Запускает внешнюю программу и возвращает её выходные данные.
+ *
+ * @param executable   путь к исполняемому файлу (например, "python3").
+ * @param scriptPath  путь к скрипту Python.
+ * @return [ProcessResult] – код завершения и выводы stdout/stderr.
+ */
+actual fun runPythonScript(
+    executable: String,
+    scriptPath: String,
+    args: List<String>
+): ProcessResult {
+    // Безопасно формируем команду: каждый аргумент – отдельный элемент списка.
+    val command = mutableListOf(executable, scriptPath)
+    command.addAll(args)
+
+    val process = ProcessBuilder(command)
+        .redirectErrorStream(false)  // будем читать stdout и stderr отдельно
+        .start()
+
+    // Считываем потоки в отдельных потоках, чтобы избежать блокировки.
+    val stdoutFuture = java.util.concurrent.Executors.newSingleThreadExecutor()
+        .submit { readAll(process.inputStream) }
+    val stderrFuture = java.util.concurrent.Executors.newSingleThreadExecutor()
+        .submit { readAll(process.errorStream) }
+
+    // Ожидаем завершения процесса (таймаут 30 секунд).
+    val finished = process.waitFor(30, TimeUnit.SECONDS)
+    if (!finished) {
+        process.destroyForcibly()
+        throw RuntimeException("Python script timed out")
+    }
+
+    return ProcessResult(
+        exitCode = process.exitValue(),
+        stdout   = (stdoutFuture.get() ?: "") as String,
+        stderr   = (stderrFuture.get() ?: "") as String
+    )
+}
+
+private fun readAll(stream: java.io.InputStream): String {
+    val reader = BufferedReader(InputStreamReader(stream))
+    val sb = StringBuilder()
+    var line: String? = reader.readLine()
+    while (line != null) {
+        sb.append(line).append('\n')
+        line = reader.readLine()
+    }
+    return sb.toString().trimEnd()
+}
 
 actual fun getPlatformName(): String {
     val osName = System.getProperty("os.name")

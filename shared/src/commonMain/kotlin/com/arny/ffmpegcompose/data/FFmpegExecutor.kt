@@ -2,12 +2,7 @@ package com.arny.ffmpegcompose.data
 
 import com.arny.ffmpegcompose.components.home.ConvertType
 import com.arny.ffmpegcompose.data.config.ConfigManager
-import com.arny.ffmpegcompose.data.models.AudioCodec
-import com.arny.ffmpegcompose.data.models.ConversionParams
-import com.arny.ffmpegcompose.data.models.ConversionProgress
-import com.arny.ffmpegcompose.data.models.MediaInfo
-import com.arny.ffmpegcompose.data.models.TrimStrategy
-import com.arny.ffmpegcompose.data.models.VideoCodec
+import com.arny.ffmpegcompose.data.models.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -88,8 +83,9 @@ class FFmpegExecutor(
 
             // Строим команду в зависимости от параметров
             val command = buildFFmpegCommand(params)
-
-            onLog("Команда: ${command.joinToString(" ")}")
+            val string = "Команда: ${command.joinToString(" ")}"
+            println(string)
+            onLog(string)
 
             val processBuilder = ProcessBuilder(command)
                 .redirectErrorStream(false)
@@ -137,70 +133,68 @@ class FFmpegExecutor(
     }
 
     /**
-     * Построение команды FFmpeg в зависимости от параметров
+     * Конструирует список аргументов FFmpeg.
+     *
+     * @return список строк‑аргументов, готовый к передаче в ProcessBuilder
+     */
+    /**
+     * Конструирует список аргументов FFmpeg.
+     *
+     * @return список строк‑аргументов, готовый к передаче в ProcessBuilder
      */
     private fun buildFFmpegCommand(params: ConversionParams): List<String> = buildList {
+        // 1. Путь к исполняемому файлу ffmpeg
         add(configManager.getFfmpegPath().toString())
 
-        // Определяем эффективную стратегию
         val effectiveStrategy = params.getEffectiveTrimStrategy()
+        // Учитываем обе границы обрезки (начало или конец)
+        val hasTrim = params.trimStartMs != null || params.trimEndMs != null
 
-        // ========== FAST SEEKING (до -i) ==========
-        // Применяется для FAST стратегии
-        // Преимущество: очень быстро
-        // Недостаток: точность только до ближайшего keyframe
-        if (params.shouldTrim() && effectiveStrategy == TrimStrategy.FAST) {
+        /* ---------- 2. FAST‑seek (до -i) ---------- */
+        if (hasTrim && effectiveStrategy == TrimStrategy.FAST) {
             params.trimStartMs?.let { startMs ->
                 add("-ss")
                 add(params.formatTimeMs(startMs))
             }
         }
 
-        // ========== ВХОДНЫЕ ФАЙЛЫ ==========
-        add("-i")
-        add(params.inputFile)
+        /* ---------- 3. Входные файлы ---------- */
+        add("-i"); add(params.inputFile)
 
         if (params.replaceAudio && params.audioFile != null) {
-            add("-i")
-            add(params.audioFile)
+            add("-i"); add(params.audioFile)
         }
 
-        // ========== ACCURATE SEEKING (после -i) ==========
-        // Применяется для ACCURATE стратегии
-        // Преимущество: точность до кадра
-        // Недостаток: медленнее, т.к. декодирует до нужной позиции
-        if (params.shouldTrim() && effectiveStrategy == TrimStrategy.ACCURATE) {
+        /* ---------- 4. ACCURATE‑seek (после -i) ---------- */
+        if (hasTrim && effectiveStrategy == TrimStrategy.ACCURATE) {
             params.trimStartMs?.let { startMs ->
                 add("-ss")
                 add(params.formatTimeMs(startMs))
             }
         }
 
-        // ========== ОБРЕЗКА: КОНЕЧНАЯ ТОЧКА ==========
-        // Вычисляем длительность или конечное время
-        if (params.shouldTrim()) {
+        /* ---------- 5. Обрезка: длительность / конечное время ---------- */
+        if (hasTrim) {
             when {
-                // Если заданы обе границы - используем длительность
+                // обе границы заданы → задаём длительность
                 params.trimStartMs != null && params.trimEndMs != null -> {
-                    val duration = params.trimEndMs - params.trimStartMs
+                    val duration = params.trimEndMs!! - params.trimStartMs!!
                     add("-t")
                     add(params.formatTimeMs(duration))
                 }
-                // Если только конец - используем -to
+                // только конец – используем -to
                 params.trimEndMs != null -> {
                     add("-to")
                     add(params.formatTimeMs(params.trimEndMs))
                 }
-                // Если только начало - обрезаем до конца файла (ничего не добавляем)
             }
         }
 
-        // ========== ПРОГРЕСС И СТАТИСТИКА ==========
-        add("-progress")
-        add("-")
+        /* ---------- 6. Прогресс и статистика ---------- */
+        add("-progress"); add("-")
         add("-nostats")
 
-        // ========== РЕЖИМ КОНВЕРТАЦИИ ==========
+        /* ---------- 7. Режим конвертации ---------- */
         when (params.convertType) {
             ConvertType.STREAM_COPY -> {
                 if (params.replaceAudio && params.audioFile != null) {
@@ -209,8 +203,7 @@ class FFmpegExecutor(
                     add("-c:v"); add(VideoCodec.COPY.codecName)
                     add("-c:a"); add(params.audioCodec.codecName)
                 } else {
-                    add("-c")
-                    add("copy")
+                    add("-c"); add("copy")
                 }
             }
 
@@ -220,43 +213,34 @@ class FFmpegExecutor(
                     add("-map"); add("1:a")
                 }
 
-                // Видео кодек
-                add("-c:v")
-                add(params.videoCodec.codecName)
-
+                // видео‑кодек
+                add("-c:v"); add(params.videoCodec.codecName)
                 if (params.videoCodec in listOf(VideoCodec.LIBX264, VideoCodec.LIBX265)) {
-                    add("-preset")
-                    add(params.preset)
-                    add("-crf")
-                    add(params.crf.toString())
+                    add("-preset"); add(params.preset)
+                    add("-crf"); add(params.crf.toString())
                 }
 
-                // Аудио кодек
-                add("-c:a")
-                add(params.audioCodec.codecName)
-
+                // аудио‑кодек
+                add("-c:a"); add(params.audioCodec.codecName)
                 if (params.audioCodec == AudioCodec.AAC) {
-                    add("-b:a")
-                    add("192k")
+                    add("-b:a"); add("192k")
                 }
             }
 
             ConvertType.AUDIO_EXTRACT -> {
+                // убираем видео, оставляем только аудио
                 add("-vn")
-                add("-acodec")
-                add(params.audioCodec.codecName)
+                add("-acodec"); add(params.audioCodec.codecName)
             }
         }
 
-        // ========== ДОПОЛНИТЕЛЬНЫЕ ОПЦИИ ==========
+        /* ---------- 8. Дополнительно ---------- */
         if (params.replaceAudio && params.audioFile != null) {
-            add("-shortest")
+            add("-shortest")          // если audio shorter than video
         }
 
-        // Перезапись выходного файла
+        /* ---------- 9. Перезапись и выходной файл ---------- */
         add("-y")
-
-        // Выходной файл
         add(params.outputFile)
     }
 
