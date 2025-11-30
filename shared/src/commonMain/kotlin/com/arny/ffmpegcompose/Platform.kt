@@ -6,8 +6,7 @@ expect fun showNotification(message: String)
 
 expect fun getPlatformName(): String
 
-expect fun runPythonScript(
-    executable: String,
+expect suspend fun runPythonScript(
     scriptPath: String,
     args: List<String>
 ): ProcessResult
