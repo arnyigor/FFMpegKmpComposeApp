@@ -11,6 +11,7 @@ import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import com.arny.ffmpegcompose.components.home.DefaultHomeComponent
 import com.arny.ffmpegcompose.components.root.DefaultRootComponent
 import com.arny.ffmpegcompose.data.FFmpegExecutor
+import com.arny.ffmpegcompose.data.WhisperExecutor
 import com.arny.ffmpegcompose.data.config.ConfigManager
 import com.arny.ffmpegcompose.data.models.FFmpegManager
 import com.arny.ffmpegcompose.di.commonModules
@@ -44,13 +45,15 @@ fun main() {
             val configManager: ConfigManager by inject(ConfigManager::class.java)
             val ffmpegManager: FFmpegManager by inject(FFmpegManager::class.java)
             val json: Json by inject(Json::class.java)
+            val ffmpegExecutor: FFmpegExecutor by inject(FFmpegExecutor::class.java)
+            val whisperExecutor: WhisperExecutor by inject(WhisperExecutor::class.java)
 
             val root = DefaultRootComponent(
                 componentContext = DefaultComponentContext(lifecycle),
                 configManager = configManager,
                 ffmpegManager = ffmpegManager,
                 homeComponentFactory = { context ->
-                    DefaultHomeComponent(context, FFmpegExecutor(configManager, json))
+                    DefaultHomeComponent(context, ffmpegExecutor, whisperExecutor)
                 }
             )
             println("RootComponent created")

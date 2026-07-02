@@ -12,6 +12,16 @@ gradle-app.setting
 !gradle-wrapper.properties
 gradle.properties.local
 .kotlin
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+
+# Generated media / transcription artifacts
+temp_segments/
+speaker_ref.wav
+final_dubbed.wav
+final_subs.srt
 
 # Maven
 target/

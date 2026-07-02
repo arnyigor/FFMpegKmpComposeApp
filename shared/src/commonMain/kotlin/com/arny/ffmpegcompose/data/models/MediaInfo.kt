@@ -3,6 +3,7 @@ package com.arny.ffmpegcompose.data.models
 import com.arny.ffmpegcompose.components.home.ConvertType
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.util.Locale
 
 /**
  * Стратегия обрезки видео
@@ -44,7 +45,10 @@ data class ConversionParams(
     val audioCodec: AudioCodec = AudioCodec.AAC,
     val preset: String = "medium",
     val crf: Int = 23,
-    val totalDurationMs: Long = 0L,
+    val totalDurationUs: Long = 0L,
+    val audioChannels: Int? = null,
+    val audioSampleRate: Int? = null,
+    val audioStreamIndex: Int? = null,
 
     // ========== ПАРАМЕТРЫ ОБРЕЗКИ ==========
 
@@ -82,7 +86,7 @@ data class ConversionParams(
         val hours = (totalSeconds / 3600).toInt()
         val minutes = ((totalSeconds % 3600) / 60).toInt()
         val seconds = totalSeconds % 60
-        return "%02d:%02d:%06.3f".format(hours, minutes, seconds)
+        return String.format(Locale.US, "%02d:%02d:%06.3f", hours, minutes, seconds)
     }
 
     /**
@@ -98,6 +102,7 @@ data class ConversionParams(
                     ConvertType.STREAM_COPY -> TrimStrategy.FAST
                     ConvertType.CONVERT -> TrimStrategy.ACCURATE
                     ConvertType.AUDIO_EXTRACT -> TrimStrategy.ACCURATE
+                    ConvertType.TRANSCRIBE -> TrimStrategy.ACCURATE
                 }
             }
             else -> trimStrategy
@@ -173,14 +178,14 @@ data class FormatInfo(
 data class ConversionProgress(
     val frame: Int = 0,
     val fps: Float = 0f,
-    val outTimeMs: Long = 0L,
+    val outTimeUs: Long = 0L,
     val totalSize: Long = 0L,
     val bitrate: Float = 0f,
     val speed: Float = 0f,
     val progress: String = "continue" // continue / end
 ) {
     val outTimeSeconds: Double
-        get() = outTimeMs / 1_000_000.0
+        get() = outTimeUs / 1_000_000.0
 
     fun formatTime(): String {
         val seconds = outTimeSeconds

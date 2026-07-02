@@ -18,6 +18,36 @@ class FFmpegExecutor(
     private var currentProcess: Process? = null
     private val _isRunning = MutableStateFlow(false)
 
+    suspend fun preview(inputFile: String, startMs: Long, endMs: Long?): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val ffmpegPath = configManager.getFfmpegPath() ?: error("FFmpeg не настроен")
+                val ffplayName = if (ffmpegPath.fileName.toString().endsWith(".exe", true)) "ffplay.exe" else "ffplay"
+                val ffplayPath = ffmpegPath.parent.resolve(ffplayName).toFile()
+                require(ffplayPath.isFile) { "Не найден ${ffplayPath.absolutePath}" }
+                val command = buildList {
+                    add(ffplayPath.absolutePath)
+                    add("-autoexit")
+                    add("-hide_banner")
+                    if (startMs > 0) {
+                        add("-ss")
+                        add(ConversionParams(
+                            inputFile = inputFile,
+                            outputFile = "",
+                            convertType = ConvertType.STREAM_COPY,
+                        ).formatTimeMs(startMs))
+                    }
+                    endMs?.takeIf { it > startMs }?.let {
+                        add("-t")
+                        add(((it - startMs) / 1_000.0).toString())
+                    }
+                    add(inputFile)
+                }
+                val exitCode = ProcessBuilder(command).start().waitFor()
+                check(exitCode == 0) { "ffplay завершился с кодом $exitCode" }
+            }
+        }
+
     /**
      * Получение информации о медиа файле (JSON)
      */
@@ -29,8 +59,14 @@ class FFmpegExecutor(
                 )
             }
 
-            val ffprobePath =
-                configManager.getFfmpegPath()?.parent?.resolve("ffprobe.exe").toString()
+            val ffmpegPath = configManager.getFfmpegPath()
+                ?: return@withContext Result.failure(Exception("FFmpeg не настроен"))
+            val ffprobeName = if (ffmpegPath.fileName.toString().endsWith(".exe", true)) {
+                "ffprobe.exe"
+            } else {
+                "ffprobe"
+            }
+            val ffprobePath = ffmpegPath.parent.resolve(ffprobeName).toString()
 
             val command = listOf(
                 ffprobePath,
@@ -38,7 +74,6 @@ class FFmpegExecutor(
                 "-print_format", "json",
                 "-show_streams",
                 "-show_format",
-                "-select_streams", "v:0",
                 inputFile
             )
 
@@ -113,8 +148,8 @@ class FFmpegExecutor(
 
             val exitCode = currentProcess?.waitFor() ?: -1
 
-            stdoutJob.cancel()
-            stderrJob.cancel()
+            stdoutJob.join()
+            stderrJob.join()
 
             _isRunning.value = false
             currentProcess = null
@@ -198,11 +233,16 @@ class FFmpegExecutor(
         when (params.convertType) {
             ConvertType.STREAM_COPY -> {
                 if (params.replaceAudio && params.audioFile != null) {
-                    add("-map"); add("0:v")
-                    add("-map"); add("1:a")
+                    add("-map"); add("0:v:0")
+                    add("-map"); add("1:a:0")
+                    add("-map"); add("0:s?")
+                    add("-map_metadata"); add("0")
+                    add("-map_chapters"); add("0")
                     add("-c:v"); add(VideoCodec.COPY.codecName)
                     add("-c:a"); add(params.audioCodec.codecName)
+                    add("-c:s"); add("copy")
                 } else {
+                    add("-map"); add("0")
                     add("-c"); add("copy")
                 }
             }
@@ -229,9 +269,19 @@ class FFmpegExecutor(
 
             ConvertType.AUDIO_EXTRACT -> {
                 // убираем видео, оставляем только аудио
+                add("-map")
+                add(params.audioStreamIndex?.let { "0:$it?" } ?: "0:a:0?")
                 add("-vn")
                 add("-acodec"); add(params.audioCodec.codecName)
+                params.audioChannels?.let { channels ->
+                    add("-ac"); add(channels.toString())
+                }
+                params.audioSampleRate?.let { sampleRate ->
+                    add("-ar"); add(sampleRate.toString())
+                }
             }
+
+            ConvertType.TRANSCRIBE -> error("TRANSCRIBE должен запускаться через Whisper pipeline")
         }
 
         /* ---------- 8. Дополнительно ---------- */
@@ -266,7 +316,9 @@ class FFmpegExecutor(
                         val progress = ConversionProgress(
                             frame = progressData["frame"]?.toIntOrNull() ?: 0,
                             fps = progressData["fps"]?.toFloatOrNull() ?: 0f,
-                            outTimeMs = progressData["out_time_ms"]?.toLongOrNull() ?: 0L,
+                            outTimeUs = progressData["out_time_us"]?.toLongOrNull()
+                                ?: progressData["out_time_ms"]?.toLongOrNull()
+                                ?: 0L,
                             totalSize = progressData["total_size"]?.toLongOrNull() ?: 0L,
                             bitrate = progressData["bitrate"]?.replace("kbits/s", "")
                                 ?.toFloatOrNull() ?: 0f,
@@ -298,9 +350,8 @@ class FFmpegExecutor(
                     process.outputStream.flush()
 
                     // Ждём 2 секунды
-                    if (!process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) {
-                        process.destroyForcibly()
-                    }
+                    process.destroy()
+                    if (process.isAlive) process.destroyForcibly()
                 } catch (e: Exception) {
                     process.destroyForcibly()
                 }

@@ -9,6 +9,7 @@ androidx-core = "1.17.0"
 androidx-lifecycle = "2.9.6"
 kotlin = "2.2.0"  # ✅ Обновлено
 compose = "1.8.2"
+compose-material3 = "1.8.2"
 desktop-preview = "1.9.3"
 icons = "1.7.3"
 koin = "4.1.1"
@@ -39,10 +40,10 @@ compose-markdown-render-m3 = { module = "com.mikepenz:multiplatform-markdown-ren
 # Compose Multiplatform
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose" }
 compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose" }
-compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose" }
+compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose-material3" }
 compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose" }
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose" }
-compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview-desktop", version = "desktop-preview" }
+compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview-desktop", version = "compose" }
 compose-material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "icons" }
 
 # --- ROOM ---

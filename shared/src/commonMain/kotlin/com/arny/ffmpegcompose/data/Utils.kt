@@ -14,39 +14,17 @@ object TimeUtils {
      * @return миллисекунды или 0L при ошибке
      */
     fun parseToMs(timeString: String): Long {
-        if (timeString.isBlank()) return 0L
+        require(timeString.isNotBlank()) { "Время не задано" }
 
         val parts = timeString.split(":")
-
-        return when (parts.size) {
-            3 -> {
-                val hours = parts[0].toLongOrNull() ?: 0
-                val minutes = parts[1].toLongOrNull() ?: 0
-                val secondsParts = parts[2].split(".")
-                val seconds = secondsParts[0].toLongOrNull() ?: 0
-
-                // Обработка переполнения секунд и минут
-                var totalSeconds = seconds
-                var totalMinutes = minutes
-                var totalHours = hours
-
-                // Перенос секунд в минуты
-                totalSeconds %= 60
-                totalMinutes += seconds / 60
-
-                // Перенос минут в часы
-                val hoursOverflow  = totalMinutes / 60
-                totalMinutes %= 60
-                totalHours += hoursOverflow
-
-                // Конвертация в миллисекунды
-                val totalMillis = totalHours * 3600 * 1000 +
-                        totalMinutes * 60 * 1000 +
-                        totalSeconds * 1000
-                totalMillis
-            }
-            else -> error("Не поддерживаемый формат ")
-        }
+        require(parts.size == 3) { "Используйте формат ЧЧ:ММ:СС" }
+        val hours = parts[0].toLongOrNull() ?: error("Некорректные часы")
+        val minutes = parts[1].toLongOrNull() ?: error("Некорректные минуты")
+        val secondsParts = parts[2].split(".", limit = 2)
+        val seconds = secondsParts[0].toLongOrNull() ?: error("Некорректные секунды")
+        val millis = secondsParts.getOrNull(1)?.padEnd(3, '0')?.take(3)?.toLongOrNull() ?: 0L
+        require(hours >= 0 && minutes in 0..59 && seconds in 0..59) { "Минуты и секунды должны быть от 00 до 59" }
+        return hours * 3_600_000L + minutes * 60_000L + seconds * 1_000L + millis
     }
 
 

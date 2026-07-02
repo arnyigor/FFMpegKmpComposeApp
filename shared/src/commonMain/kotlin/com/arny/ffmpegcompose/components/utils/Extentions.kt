@@ -22,7 +22,7 @@ fun Double?.formatFps(): String = when {
 
 fun String?.toDurationSeconds(): Double? = this?.toDoubleOrNull()
 
-fun String?.toDurationLongMs(): Long? {
+fun String?.toDurationUs(): Long? {
     val seconds = this?.toDurationSeconds()
     return seconds?.let { (it * 1_000_000L).toLong() }
 }

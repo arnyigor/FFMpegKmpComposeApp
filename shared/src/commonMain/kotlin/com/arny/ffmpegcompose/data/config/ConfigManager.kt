@@ -41,7 +41,8 @@ class ConfigManager {
      */
     fun isFfmpegConfigured(): Boolean {
         val ffmpegPath = getFfmpegPath() ?: return false
-        val ffprobePath = ffmpegPath.parent.resolve("ffprobe.exe")
+        val ffprobeName = if (ffmpegPath.fileName.toString().endsWith(".exe", true)) "ffprobe.exe" else "ffprobe"
+        val ffprobePath = ffmpegPath.parent.resolve(ffprobeName)
         return ffmpegPath.exists() && ffprobePath.exists()
     }
 

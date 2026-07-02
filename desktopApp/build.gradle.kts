@@ -1,6 +1,8 @@
 // desktopApp/build.gradle.kts
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.gradle.api.tasks.Sync
+import org.gradle.api.tasks.bundling.Zip
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -42,9 +44,28 @@ compose.desktop {
                 TargetFormat.Exe,    // Windows EXE-установщик
                 TargetFormat.Deb     // Linux
             )
-            packageName = "KmpComposeTemplate"
-            packageVersion = "1.0.0"
+            packageName = "FFmpegMediaWorkshop"
+            packageVersion = "1.1.0"
+            description = "Desktop media converter, trimmer and offline Whisper transcription tool"
+            vendor = "Arny"
             modules("jdk.accessibility")
         }
     }
+}
+
+tasks.withType<Sync>().matching { it.name == "prepareAppResources" }.configureEach {
+    from(rootProject.layout.projectDirectory.file("whisper_transcribe.py")) { into("python") }
+    from(rootProject.layout.projectDirectory.file("dubber_gpu_tts.py")) { into("python") }
+    from(rootProject.layout.projectDirectory.file("requirements-whisper.txt")) { into("python") }
+}
+
+tasks.register<Zip>("packagePortable") {
+    description = "Builds the complete portable Windows application with bundled Java runtime"
+    group = "compose desktop"
+    dependsOn("createDistributable")
+    from(layout.buildDirectory.dir("compose/binaries/main/app/FFmpegMediaWorkshop")) {
+        into("FFmpegMediaWorkshop")
+    }
+    archiveFileName.set("FFmpegMediaWorkshop-1.1.0-windows-x64-portable.zip")
+    destinationDirectory.set(layout.buildDirectory.dir("compose/binaries/main/portable"))
 }

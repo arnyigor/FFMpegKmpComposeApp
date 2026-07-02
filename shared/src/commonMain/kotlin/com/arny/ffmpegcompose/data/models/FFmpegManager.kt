@@ -29,11 +29,14 @@ class FFmpegManager {
                 return@withContext Result.failure(Exception("Файл не найден: $path"))
             }
 
-            if (!path.fileName.toString().equals("ffmpeg.exe", ignoreCase = true)) {
-                return@withContext Result.failure(Exception("Выбранный файл не является ffmpeg.exe"))
+            if (!path.fileName.toString().equals("ffmpeg.exe", ignoreCase = true) &&
+                !path.fileName.toString().equals("ffmpeg", ignoreCase = true)
+            ) {
+                return@withContext Result.failure(Exception("Выбранный файл не является FFmpeg"))
             }
 
-            val ffprobePath = path.parent.resolve("ffprobe.exe")
+            val ffprobeName = if (path.fileName.toString().endsWith(".exe", true)) "ffprobe.exe" else "ffprobe"
+            val ffprobePath = path.parent.resolve(ffprobeName)
             val version = getVersion(path)
 
             val verification = FfmpegVerification(
@@ -60,6 +63,11 @@ class FFmpegManager {
         onProgress: (DownloadProgress) -> Unit
     ): Result<Path> = withContext(Dispatchers.IO) {
         try {
+            if (!System.getProperty("os.name").lowercase().contains("win")) {
+                return@withContext Result.failure(
+                    Exception("Автоматическая загрузка FFmpeg доступна только для Windows. Укажите установленный ffmpeg вручную.")
+                )
+            }
             val url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 
             onProgress(DownloadProgress(phase = DownloadPhase.DOWNLOADING, percent = 0))
@@ -127,8 +135,8 @@ class FFmpegManager {
             while (entry != null) {
                 val fileName = entry.name
 
-                // Извлекаем ffmpeg.exe и ffprobe.exe
-                if (fileName.endsWith("ffmpeg.exe") || fileName.endsWith("ffprobe.exe")) {
+                // Извлекаем ffmpeg.exe, ffprobe.exe и ffplay.exe
+                if (fileName.endsWith("ffmpeg.exe") || fileName.endsWith("ffprobe.exe") || fileName.endsWith("ffplay.exe")) {
                     val targetFile = targetDir.resolve(fileName.substringAfterLast("/"))
 
                     targetFile.outputStream().use { output ->
@@ -139,7 +147,13 @@ class FFmpegManager {
                         ffmpegPath = targetFile
                     }
 
-                    onProgress(if (fileName.endsWith("ffprobe.exe")) 100 else 50)
+                    onProgress(
+                        when {
+                            fileName.endsWith("ffmpeg.exe") -> 34
+                            fileName.endsWith("ffprobe.exe") -> 67
+                            else -> 100
+                        }
+                    )
                 }
 
                 processedEntries++

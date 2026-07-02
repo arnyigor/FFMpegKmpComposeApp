@@ -198,7 +198,7 @@ private fun DownloadingContent(
     ) {
         CircularProgressIndicator(
             modifier = Modifier.size(64.dp),
-            progress = if (progress != null) progress.percent / 100f else 0f
+            progress = { if (progress != null) progress.percent / 100f else 0f }
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -218,7 +218,7 @@ private fun DownloadingContent(
             Spacer(modifier = Modifier.height(16.dp))
 
             LinearProgressIndicator(
-                progress = it.percent / 100f,
+                progress = { it.percent / 100f },
                 modifier = Modifier
                     .fillMaxWidth(0.5f)
                     .height(8.dp)

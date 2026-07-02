@@ -4,6 +4,7 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.coroutines.coroutineScope
 import com.arny.ffmpegcompose.components.utils.*
 import com.arny.ffmpegcompose.data.FFmpegExecutor
+import com.arny.ffmpegcompose.data.WhisperExecutor
 import com.arny.ffmpegcompose.data.models.*
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +41,11 @@ object EmptyHomeCallbacks : HomeCallbacks {
     override fun onTrimEndChange(trimEnd: Long?) {}
     override fun onTrimStartChange(startMs: Long?) {}
     override fun onTrimStrategyChange(trimStrategy: TrimStrategy) {}
+    override fun onWhisperModelChange(model: WhisperModelOption) {}
+    override fun onWhisperLanguageChange(language: String) {}
+    override fun onWordTimestampsToggled(checked: Boolean) {}
+    override fun onAudioStreamChange(index: Int) {}
+    override fun onPreviewSelection() {}
 }
 
 interface HomeCallbacks {
@@ -57,6 +63,11 @@ interface HomeCallbacks {
     fun onTrimStartChange(startMs: Long?)
     fun onTrimEndChange(trimEnd: Long?)
     fun onTrimStrategyChange(trimStrategy: TrimStrategy)
+    fun onWhisperModelChange(model: WhisperModelOption)
+    fun onWhisperLanguageChange(language: String)
+    fun onWordTimestampsToggled(checked: Boolean)
+    fun onAudioStreamChange(index: Int)
+    fun onPreviewSelection()
 }
 
 data class HomeUiState(
@@ -65,7 +76,6 @@ data class HomeUiState(
     val outputFile: String? = null,
     val audioFile: String? = null,
     val replaceAudioSelected: Boolean = false,
-    val streamCopySelected: Boolean = false,
     val trimSelected: Boolean = false,
     val mediaInfo: MediaInfo? = null,
     val conversionProgress: ConversionProgress? = null,
@@ -73,15 +83,18 @@ data class HomeUiState(
     val logs: List<LogEntry> = emptyList(),
     val error: String? = null,
     val successMessage: String? = null,
-    val totalDurationMs: Long = 0L,
+    val totalDurationUs: Long = 0L,
     val trimParams: TrimParams = TrimParams(),
+    val processingProgress: ProcessingProgress = ProcessingProgress(),
+    val whisperSettings: WhisperSettings = WhisperSettings(),
+    val resultFiles: List<String> = emptyList(),
+    val selectedAudioStreamIndex: Int? = null,
 )
 
 data class TrimParams(
     val trimStartMs: Long? = null,
     val trimEndMs: Long? = null,
     val trimStrategy: TrimStrategy = TrimStrategy.AUTO,
-    val totalDurationMs: Long = 0,
 )
 
 enum class ConvertType(
@@ -90,6 +103,7 @@ enum class ConvertType(
     STREAM_COPY("Прямопотоковое копирование"),
     CONVERT("Конвертация"),
     AUDIO_EXTRACT("Извлечь аудио"),
+    TRANSCRIBE("Распознать речь"),
 }
 
 data class LogEntry(
@@ -105,7 +119,8 @@ enum class LogLevel {
 
 class DefaultHomeComponent(
     componentContext: ComponentContext,
-    private val ffmpegExecutor: FFmpegExecutor
+    private val ffmpegExecutor: FFmpegExecutor,
+    private val whisperExecutor: WhisperExecutor,
 ) : HomeComponent, ComponentContext by componentContext {
 
     private val scope = coroutineScope(SupervisorJob())
@@ -114,7 +129,16 @@ class DefaultHomeComponent(
     override val state: StateFlow<HomeUiState> = _state.asStateFlow()
 
     override fun onChangeConvertType(type: ConvertType) {
-        _state.update { it.copy(convertType = type) }
+        _state.update { state ->
+            state.copy(
+                convertType = type,
+                outputFile = state.inputFile?.let { suggestedOutputPath(it, type) },
+                replaceAudioSelected = state.replaceAudioSelected &&
+                        type != ConvertType.AUDIO_EXTRACT && type != ConvertType.TRANSCRIBE,
+                error = null,
+                successMessage = null,
+            )
+        }
         addLog("Изменен тип конвертации на ${type.title}", LogLevel.INFO)
     }
 
@@ -128,7 +152,12 @@ class DefaultHomeComponent(
     }
 
     override fun onTrimToggled(checked: Boolean) {
-        _state.update { it.copy(trimSelected = checked) }
+        _state.update {
+            it.copy(
+                trimSelected = checked,
+                trimParams = if (checked) it.trimParams else TrimParams(),
+            )
+        }
         addLog(
             if (checked) "Обрезка включена" else "Обрезка отключена",
             LogLevel.INFO
@@ -137,7 +166,7 @@ class DefaultHomeComponent(
 
     override fun onSelectInputFile() {
         val fileDialog = FileDialog(null as Frame?, "Выберите видео файл", FileDialog.LOAD)
-        fileDialog.file = "*.mp4;*.avi;*.mkv;*.mov;*.webm"
+        fileDialog.file = "*.mp4;*.avi;*.mkv;*.mov;*.webm;*.mp3;*.wav;*.flac;*.m4a;*.aac;*.ogg;*.opus"
         fileDialog.isVisible = true
 
         val directory = fileDialog.directory
@@ -145,8 +174,17 @@ class DefaultHomeComponent(
 
         if (directory != null && file != null) {
             val path = Paths.get(directory, file).absolutePathString()
-            _state.update { it.copy(inputFile = path, mediaInfo = null) }
+            _state.update {
+                it.copy(
+                    inputFile = path,
+                    outputFile = suggestedOutputPath(path, it.convertType),
+                    mediaInfo = null,
+                    error = null,
+                    successMessage = null,
+                )
+            }
             addLog("Выбран входной файл: $path", LogLevel.INFO)
+            getMediaInfo(path)
         }
     }
 
@@ -171,9 +209,12 @@ class DefaultHomeComponent(
     override fun onSelectOutputFile() {
         val fileDialog = FileDialog(null as Frame?, "Сохранить как", FileDialog.SAVE)
         val extension = when (_state.value.convertType) {
-            ConvertType.STREAM_COPY -> ".mp4"
+            ConvertType.STREAM_COPY -> _state.value.inputFile
+                ?.let { File(it).extension.takeIf(String::isNotBlank)?.let { ext -> ".$ext" } }
+                ?: ".mkv"
             ConvertType.CONVERT -> ".mp4"
-            ConvertType.AUDIO_EXTRACT -> ".wav" // сделать опциональным
+            ConvertType.AUDIO_EXTRACT -> ".wav"
+            ConvertType.TRANSCRIBE -> ".srt"
         }
 
         fileDialog.file = "output$extension"
@@ -183,7 +224,7 @@ class DefaultHomeComponent(
         val fileName = fileDialog.file
 
         if (directory != null && fileName != null) {
-            val paths = Paths.get(directory, replaceDotsWithUnderscores(fileName))
+            val paths = Paths.get(directory, fileName)
             var outputFile = paths.absolutePathString()
             if (paths.extension.isEmpty()) {
                 outputFile += extension
@@ -193,7 +234,18 @@ class DefaultHomeComponent(
         }
     }
 
-    fun replaceDotsWithUnderscores(fileName: String): String = fileName.replace(".", "_")
+    private fun suggestedOutputPath(inputPath: String, type: ConvertType): String {
+        val input = File(inputPath)
+        val base = input.nameWithoutExtension.ifBlank { "output" }
+        val sourceExtension = input.extension.takeIf(String::isNotBlank)?.let { ".$it" } ?: ".mkv"
+        val suffix = when (type) {
+            ConvertType.STREAM_COPY -> "_copy$sourceExtension"
+            ConvertType.CONVERT -> "_converted.mp4"
+            ConvertType.AUDIO_EXTRACT -> "_audio.wav"
+            ConvertType.TRANSCRIBE -> "_transcript.srt"
+        }
+        return File(input.parentFile ?: File("."), base + suffix).absolutePath
+    }
 
     override fun onSelectAudioFile() {
         val fileDialog = FileDialog(null as Frame?, "Выберите аудио файл", FileDialog.LOAD)
@@ -226,12 +278,14 @@ class DefaultHomeComponent(
             val result = ffmpegExecutor.getMediaInfo(inputFile)
 
             result.onSuccess { mediaInfo ->
-                val totalDurationMs = mediaInfo.format.duration.toDurationLongMs() ?: 0L
+                val totalDurationUs = mediaInfo.format.duration.toDurationUs() ?: 0L
                 _state.update {
                     it.copy(
                         mediaInfo = enrichMediaInfo(mediaInfo),
                         isProcessing = false,
-                        totalDurationMs = totalDurationMs
+                        totalDurationUs = totalDurationUs,
+                        processingProgress = ProcessingProgress(),
+                        selectedAudioStreamIndex = mediaInfo.streams.firstOrNull { stream -> stream.codecType == "audio" }?.index,
                     )
                 }
                 addLog("✓ Анализ завершён", LogLevel.SUCCESS)
@@ -290,13 +344,31 @@ class DefaultHomeComponent(
             return
         }
 
+        if (currentState.trimSelected) {
+            val start = currentState.trimParams.trimStartMs ?: 0L
+            val end = currentState.trimParams.trimEndMs
+            val durationMs = currentState.totalDurationUs / 1_000L
+            if (start < 0 || (end != null && end <= start) || start >= durationMs || (end != null && end > durationMs)) {
+                _state.update { it.copy(error = "Проверьте границы обрезки: начало должно быть меньше конца и находиться внутри файла") }
+                return
+            }
+        }
+
         scope.launch {
             _state.update {
                 it.copy(
                     isProcessing = true,
                     error = null,
                     successMessage = null,
-                    conversionProgress = null
+                    conversionProgress = null,
+                    resultFiles = emptyList(),
+                    processingProgress = ProcessingProgress(
+                        phase = if (currentState.convertType == ConvertType.TRANSCRIBE) {
+                            ProcessingPhase.EXTRACTING_AUDIO
+                        } else {
+                            ProcessingPhase.CONVERTING
+                        },
+                    ),
                 )
             }
 
@@ -307,7 +379,12 @@ class DefaultHomeComponent(
                 addLog("Замена аудио: ${currentState.audioFile}", LogLevel.INFO)
             }
 
-            // Формируем параметры конвертации
+            if (currentState.convertType == ConvertType.TRANSCRIBE) {
+                runTranscription(currentState, inputFile, outputFile)
+                return@launch
+            }
+
+            val startedAt = System.currentTimeMillis()
             val params = ConversionParams(
                 inputFile = inputFile,
                 outputFile = outputFile,
@@ -315,25 +392,48 @@ class DefaultHomeComponent(
                 convertType = currentState.convertType,
                 replaceAudio = currentState.replaceAudioSelected,
                 videoCodec = when (currentState.convertType) {
-                    ConvertType.STREAM_COPY, ConvertType.AUDIO_EXTRACT -> VideoCodec.COPY
-                    else -> VideoCodec.LIBX264
+                    ConvertType.STREAM_COPY, ConvertType.AUDIO_EXTRACT, ConvertType.TRANSCRIBE -> VideoCodec.COPY
+                    ConvertType.CONVERT -> VideoCodec.LIBX264
                 },
                 audioCodec = when (currentState.convertType) {
                     ConvertType.STREAM_COPY if !currentState.replaceAudioSelected -> AudioCodec.COPY
+                    ConvertType.STREAM_COPY -> AudioCodec.AAC
                     ConvertType.AUDIO_EXTRACT -> AudioCodec.WAV
-                    else -> AudioCodec.AAC
+                    ConvertType.TRANSCRIBE -> AudioCodec.WAV
+                    ConvertType.CONVERT -> AudioCodec.AAC
                 },
                 preset = "medium",
-                trimStartMs = currentState.trimParams.trimStartMs,
-                trimEndMs = currentState.trimParams.trimEndMs,
+                trimStartMs = currentState.trimParams.trimStartMs.takeIf { currentState.trimSelected },
+                trimEndMs = currentState.trimParams.trimEndMs.takeIf { currentState.trimSelected },
                 trimStrategy = currentState.trimParams.trimStrategy,
+                totalDurationUs = targetDurationUs(currentState),
+                audioStreamIndex = currentState.selectedAudioStreamIndex,
                 crf = 23
             )
 
             val result = ffmpegExecutor.convertWithProgress(
                 params = params,
                 onProgress = { progress ->
-                    _state.update { it.copy(conversionProgress = progress) }
+                    val targetUs = params.totalDurationUs
+                    val fraction = if (targetUs > 0L) {
+                        (progress.outTimeUs.toDouble() / targetUs).toFloat().coerceIn(0f, 1f)
+                    } else null
+                    val remainingMs = if (targetUs > 0L && progress.speed > 0f) {
+                        (((targetUs - progress.outTimeUs).coerceAtLeast(0L) / progress.speed) / 1_000.0).toLong()
+                    } else null
+                    _state.update {
+                        it.copy(
+                            conversionProgress = progress,
+                            processingProgress = ProcessingProgress(
+                                phase = ProcessingPhase.CONVERTING,
+                                phaseProgress = fraction,
+                                overallProgress = fraction,
+                                elapsedMs = System.currentTimeMillis() - startedAt,
+                                estimatedRemainingMs = remainingMs,
+                                detail = "${progress.formatTime()} • ${progress.speed}x",
+                            ),
+                        )
+                    }
                 },
                 onLog = { logMessage ->
                     if (logMessage.contains("[stderr]")) {
@@ -346,7 +446,14 @@ class DefaultHomeComponent(
                 _state.update {
                     it.copy(
                         isProcessing = false,
-                        successMessage = "Конвертация завершена $filePath"
+                        successMessage = "Готово: $filePath",
+                        resultFiles = listOf(filePath),
+                        processingProgress = it.processingProgress.copy(
+                            phase = ProcessingPhase.COMPLETED,
+                            phaseProgress = 1f,
+                            overallProgress = 1f,
+                            estimatedRemainingMs = 0L,
+                        ),
                     )
                 }
                 addLog("=== КОНВЕРТАЦИЯ ЗАВЕРШЕНА ===", LogLevel.SUCCESS)
@@ -354,10 +461,12 @@ class DefaultHomeComponent(
                 onOpenFolder(filePath)
             }.onFailure { error ->
                 error.printStackTrace()
+                if (_state.value.processingProgress.phase == ProcessingPhase.CANCELLED) return@onFailure
                 _state.update {
                     it.copy(
                         isProcessing = false,
-                        error = error.message
+                        error = error.message,
+                        processingProgress = it.processingProgress.copy(phase = ProcessingPhase.FAILED),
                     )
                 }
                 addLog("=== ОШИБКА КОНВЕРТАЦИИ ===", LogLevel.ERROR)
@@ -366,12 +475,127 @@ class DefaultHomeComponent(
         }
     }
 
+    private suspend fun runTranscription(state: HomeUiState, inputFile: String, outputFile: String) {
+        val startedAt = System.currentTimeMillis()
+        val tempAudio = File.createTempFile("ffmpeg-whisper-", ".wav")
+        val outputBase = File(outputFile).let { file ->
+            File(file.parentFile ?: File("."), file.nameWithoutExtension).absolutePath
+        }
+        try {
+            val extractionParams = ConversionParams(
+                inputFile = inputFile,
+                outputFile = tempAudio.absolutePath,
+                convertType = ConvertType.AUDIO_EXTRACT,
+                videoCodec = VideoCodec.COPY,
+                audioCodec = AudioCodec.WAV,
+                audioChannels = 1,
+                audioSampleRate = 16_000,
+                audioStreamIndex = state.selectedAudioStreamIndex,
+                trimStartMs = state.trimParams.trimStartMs.takeIf { state.trimSelected },
+                trimEndMs = state.trimParams.trimEndMs.takeIf { state.trimSelected },
+                trimStrategy = TrimStrategy.ACCURATE,
+                totalDurationUs = targetDurationUs(state),
+            )
+            val extraction = ffmpegExecutor.convertWithProgress(
+                params = extractionParams,
+                onProgress = { progress ->
+                    val fraction = if (extractionParams.totalDurationUs > 0) {
+                        (progress.outTimeUs.toDouble() / extractionParams.totalDurationUs).toFloat().coerceIn(0f, 1f)
+                    } else null
+                    _state.update {
+                        it.copy(
+                            conversionProgress = progress,
+                            processingProgress = ProcessingProgress(
+                                phase = ProcessingPhase.EXTRACTING_AUDIO,
+                                phaseProgress = fraction,
+                                overallProgress = fraction?.times(0.2f),
+                                elapsedMs = System.currentTimeMillis() - startedAt,
+                                detail = "Подготовка WAV 16 kHz mono",
+                            ),
+                        )
+                    }
+                },
+                onLog = { addLog(it, LogLevel.DEBUG) },
+            )
+            extraction.getOrThrow()
+
+            val whisperStartedAt = System.currentTimeMillis()
+            val transcription = whisperExecutor.transcribe(
+                audioFile = tempAudio.absolutePath,
+                outputBase = outputBase,
+                settings = state.whisperSettings,
+                onProgress = { phase, fraction, detail ->
+                    val phaseElapsedMs = System.currentTimeMillis() - whisperStartedAt
+                    val remainingMs = fraction?.takeIf { it > 0f }?.let {
+                        (phaseElapsedMs / it - phaseElapsedMs).toLong().coerceAtLeast(0L)
+                    }
+                    val overall = when (phase) {
+                        ProcessingPhase.LOADING_MODEL -> 0.2f
+                        ProcessingPhase.TRANSCRIBING -> 0.2f + (fraction ?: 0f) * 0.78f
+                        else -> null
+                    }
+                    _state.update {
+                        it.copy(
+                            processingProgress = ProcessingProgress(
+                                phase = phase,
+                                phaseProgress = fraction,
+                                overallProgress = overall,
+                                elapsedMs = System.currentTimeMillis() - startedAt,
+                                estimatedRemainingMs = remainingMs,
+                                detail = detail,
+                            ),
+                        )
+                    }
+                },
+                onLog = { addLog(it, LogLevel.DEBUG) },
+            ).getOrThrow()
+
+            _state.update {
+                it.copy(
+                    isProcessing = false,
+                    successMessage = "Транскрибация завершена (${transcription.detectedLanguage ?: "язык не определён"})",
+                    resultFiles = transcription.outputFiles,
+                    processingProgress = ProcessingProgress(
+                        phase = ProcessingPhase.COMPLETED,
+                        phaseProgress = 1f,
+                        overallProgress = 1f,
+                        elapsedMs = System.currentTimeMillis() - startedAt,
+                        estimatedRemainingMs = 0L,
+                        detail = transcription.outputFiles.joinToString(),
+                    ),
+                )
+            }
+            transcription.outputFiles.forEach { addLog(it, LogLevel.SUCCESS) }
+        } catch (error: Exception) {
+            if (_state.value.processingProgress.phase == ProcessingPhase.CANCELLED) return
+            _state.update {
+                it.copy(
+                    isProcessing = false,
+                    error = error.message ?: "Ошибка Whisper",
+                    processingProgress = it.processingProgress.copy(phase = ProcessingPhase.FAILED),
+                )
+            }
+            addLog("Ошибка Whisper: ${error.message}", LogLevel.ERROR)
+        } finally {
+            tempAudio.delete()
+        }
+    }
+
+    private fun targetDurationUs(state: HomeUiState): Long {
+        if (!state.trimSelected) return state.totalDurationUs
+        val startUs = (state.trimParams.trimStartMs ?: 0L) * 1_000L
+        val endUs = (state.trimParams.trimEndMs?.times(1_000L) ?: state.totalDurationUs)
+        return (endUs - startUs).coerceAtLeast(0L)
+    }
+
     override fun onCancelConversion() {
         ffmpegExecutor.cancel()
+        whisperExecutor.cancel()
         _state.update {
             it.copy(
                 isProcessing = false,
-                conversionProgress = null
+                conversionProgress = null,
+                processingProgress = it.processingProgress.copy(phase = ProcessingPhase.CANCELLED),
             )
         }
         addLog("Конвертация отменена пользователем", LogLevel.WARNING)
@@ -382,7 +606,7 @@ class DefaultHomeComponent(
     }
 
     override fun onOpenOutputFolder() {
-        onOpenFolder(_state.value.outputFile.orEmpty())
+        onOpenFolder(_state.value.resultFiles.firstOrNull() ?: _state.value.outputFile.orEmpty())
     }
 
     private fun enrichMediaInfo(mediaInfo: MediaInfo): MediaInfo {
@@ -449,7 +673,6 @@ class DefaultHomeComponent(
                 )
             )
         }
-        addLog("Изменили конец обрезки на $trimEnd ms", LogLevel.INFO)
     }
 
     override fun onTrimStartChange(startMs: Long?) {
@@ -460,7 +683,6 @@ class DefaultHomeComponent(
                 )
             )
         }
-        addLog("Изменили начало обрезки на $startMs", LogLevel.INFO)
     }
 
     override fun onTrimStrategyChange(trimStrategy: TrimStrategy) {
@@ -473,5 +695,32 @@ class DefaultHomeComponent(
         }
         addLog("Изменили стратегию обрезки на $trimStrategy", LogLevel.INFO)
     }
-}
 
+    override fun onWhisperModelChange(model: WhisperModelOption) {
+        _state.update { it.copy(whisperSettings = it.whisperSettings.copy(model = model)) }
+    }
+
+    override fun onWhisperLanguageChange(language: String) {
+        _state.update { it.copy(whisperSettings = it.whisperSettings.copy(language = language.trim())) }
+    }
+
+    override fun onWordTimestampsToggled(checked: Boolean) {
+        _state.update { it.copy(whisperSettings = it.whisperSettings.copy(wordTimestamps = checked)) }
+    }
+
+    override fun onAudioStreamChange(index: Int) {
+        _state.update { it.copy(selectedAudioStreamIndex = index) }
+    }
+
+    override fun onPreviewSelection() {
+        val state = _state.value
+        val input = state.inputFile ?: return
+        scope.launch {
+            ffmpegExecutor.preview(
+                inputFile = input,
+                startMs = state.trimParams.trimStartMs ?: 0L,
+                endMs = state.trimParams.trimEndMs,
+            ).onFailure { addLog("Предпросмотр недоступен: ${it.message}", LogLevel.ERROR) }
+        }
+    }
+}
