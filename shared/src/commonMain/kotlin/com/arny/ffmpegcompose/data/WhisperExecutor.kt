@@ -198,12 +198,23 @@ class WhisperExecutor(private val json: Json) {
         )
         onProgress(ProcessingPhase.LOADING_MODEL, 0.2f, "Установка Python 3.12")
         runCommand(
-            listOf(uvExecutable.absolutePath, "venv", "--python", "3.12", venvDir.absolutePath),
+            listOf(uvExecutable.absolutePath, "python", "install", "3.12"),
             targetDir,
             environment,
             onLog,
         )
-        onProgress(ProcessingPhase.LOADING_MODEL, 0.45f, "Установка faster-whisper")
+        onProgress(ProcessingPhase.LOADING_MODEL, 0.35f, "Создание окружения Whisper")
+        if (python.isFile) {
+            onLog("Окружение Whisper уже существует: ${venvDir.absolutePath}")
+        } else {
+            runCommand(
+                listOf(uvExecutable.absolutePath, "venv", "--clear", "--python", "3.12", venvDir.absolutePath),
+                targetDir,
+                environment,
+                onLog,
+            )
+        }
+        onProgress(ProcessingPhase.LOADING_MODEL, 0.55f, "Установка faster-whisper")
         runCommand(
             listOf(
                 uvExecutable.absolutePath,
@@ -278,6 +289,8 @@ class WhisperExecutor(private val json: Json) {
         environment: Map<String, String>,
         onLog: (String) -> Unit,
     ) {
+        onLog("$ ${command.joinToString(" ")}")
+        val recentOutput = ArrayDeque<String>()
         val process = ProcessBuilder(command)
             .directory(workingDir)
             .redirectErrorStream(true)
@@ -285,11 +298,23 @@ class WhisperExecutor(private val json: Json) {
             .start()
         currentProcess = process
         process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
-            lines.forEach(onLog)
+            lines.forEach { line ->
+                if (recentOutput.size == 20) recentOutput.removeFirst()
+                recentOutput.addLast(line)
+                onLog(line)
+            }
         }
         val exitCode = process.waitFor()
         currentProcess = null
-        check(exitCode == 0) { "Установка компонента завершилась с кодом $exitCode" }
+        check(exitCode == 0) {
+            buildString {
+                append("Установка компонента завершилась с кодом $exitCode")
+                if (recentOutput.isNotEmpty()) {
+                    append("\nПоследние строки:\n")
+                    append(recentOutput.joinToString("\n"))
+                }
+            }
+        }
     }
 
     private companion object {

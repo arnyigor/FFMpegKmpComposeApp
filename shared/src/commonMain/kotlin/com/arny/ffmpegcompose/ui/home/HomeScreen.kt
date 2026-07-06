@@ -27,7 +27,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -1026,6 +1028,7 @@ private fun ActionBar(state: HomeUiState, callbacks: HomeCallbacks) {
 @Composable
 private fun LogsPanel(logs: List<LogEntry>, onClear: () -> Unit, modifier: Modifier = Modifier) {
     val listState = rememberLazyListState()
+    val clipboardManager = LocalClipboardManager.current
     Card(modifier.padding(12.dp)) {
         Column(Modifier.fillMaxSize()) {
             Row(
@@ -1033,6 +1036,16 @@ private fun LogsPanel(logs: List<LogEntry>, onClear: () -> Unit, modifier: Modif
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("Технический журнал", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                TextButton(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(logs.joinToString("\n") { it.message }))
+                    },
+                    enabled = logs.isNotEmpty(),
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Копировать")
+                }
                 TextButton(onClick = onClear) { Text("Очистить") }
             }
             HorizontalDivider()
