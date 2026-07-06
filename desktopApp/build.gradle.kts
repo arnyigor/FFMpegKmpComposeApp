@@ -1,5 +1,4 @@
 // desktopApp/build.gradle.kts
-import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.gradle.api.tasks.Sync
 import org.gradle.api.tasks.bundling.Zip
@@ -38,17 +37,14 @@ compose.desktop {
     application {
         mainClass = "com.arny.ffmpegcompose.MainKt"
         nativeDistributions {
-            targetFormats(
-                TargetFormat.Dmg,    // macOS
-                TargetFormat.Msi,    // Windows MSI-установщик
-                TargetFormat.Exe,    // Windows EXE-установщик
-                TargetFormat.Deb     // Linux
-            )
             packageName = "FFmpegMediaWorkshop"
             packageVersion = "1.1.0"
             description = "Desktop media converter, trimmer and offline Whisper transcription tool"
             vendor = "Arny"
             modules("jdk.accessibility")
+            windows {
+                console = false
+            }
         }
     }
 }
@@ -68,4 +64,16 @@ tasks.register<Zip>("packagePortable") {
     }
     archiveFileName.set("FFmpegMediaWorkshop-1.1.0-windows-x64-portable.zip")
     destinationDirectory.set(layout.buildDirectory.dir("compose/binaries/main/portable"))
+}
+
+tasks.register("allPackage") {
+    description = "Alias for portable packaging without MSI/EXE installer"
+    group = "compose desktop"
+    dependsOn("packagePortable")
+}
+
+tasks.register("allpackage") {
+    description = "Alias for portable packaging without MSI/EXE installer"
+    group = "compose desktop"
+    dependsOn("packagePortable")
 }

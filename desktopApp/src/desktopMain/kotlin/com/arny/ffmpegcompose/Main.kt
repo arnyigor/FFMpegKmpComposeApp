@@ -2,6 +2,8 @@ package com.arny.ffmpegcompose
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -20,10 +22,17 @@ import com.arny.ffmpegcompose.ui.RootContent
 import kotlinx.serialization.json.Json
 import org.koin.core.context.startKoin
 import org.koin.java.KoinJavaComponent.inject
+import java.awt.Dimension
+
+private val WorkshopColors = lightColorScheme(
+    primary = Color(0xFF5B4AB5),
+    secondary = Color(0xFF356A63),
+    tertiary = Color(0xFF7A5260),
+    surface = Color(0xFFFFFBFF),
+    background = Color(0xFFFFFBFF),
+)
 
 fun main() {
-    println("Starting Desktop App...")  // ✅ Debug вывод
-
     try {
         // Инициализация Koin
         startKoin {
@@ -31,8 +40,6 @@ fun main() {
                 commonModules + desktopModules
             )
         }
-        println("Koin initialized")  // ✅ Debug
-
         application {
             val windowState = rememberWindowState(
                 width = 1200.dp,
@@ -56,15 +63,18 @@ fun main() {
                     DefaultHomeComponent(context, ffmpegExecutor, whisperExecutor)
                 }
             )
-            println("RootComponent created")
-
             Window(
-                onCloseRequest = ::exitApplication,
-                title = "FFmpeg Desktop Converter",
+                onCloseRequest = {
+                    ffmpegExecutor.stopPreview()
+                    ffmpegExecutor.cancel()
+                    whisperExecutor.cancel()
+                    exitApplication()
+                },
+                title = "FFmpeg Media Workshop",
                 state = windowState
             ) {
-                println("Window created")
-                MaterialTheme {
+                window.minimumSize = Dimension(900, 680)
+                MaterialTheme(colorScheme = WorkshopColors) {
                     Surface {
                         RootContent(root)
                     }
@@ -73,6 +83,5 @@ fun main() {
         }
     } catch (e: Exception) {
         e.printStackTrace()
-        System.err.println("Error: ${e.message}")
     }
 }

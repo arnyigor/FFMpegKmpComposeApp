@@ -7,6 +7,9 @@ import com.arny.ffmpegcompose.data.FFmpegExecutor
 import com.arny.ffmpegcompose.data.WhisperExecutor
 import com.arny.ffmpegcompose.data.models.*
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +24,7 @@ import java.util.*
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.extension
 import kotlin.math.abs
+import kotlin.math.roundToLong
 
 interface HomeComponent : HomeCallbacks {
     val state: StateFlow<HomeUiState>
@@ -46,6 +50,10 @@ object EmptyHomeCallbacks : HomeCallbacks {
     override fun onWordTimestampsToggled(checked: Boolean) {}
     override fun onAudioStreamChange(index: Int) {}
     override fun onPreviewSelection() {}
+    override fun onStopPreview() {}
+    override fun onPreviewVolumeChange(volume: Int) {}
+    override fun onPreviewVolumeCommitted() {}
+    override fun onPreviewPositionChange(positionMs: Long) {}
 }
 
 interface HomeCallbacks {
@@ -68,6 +76,10 @@ interface HomeCallbacks {
     fun onWordTimestampsToggled(checked: Boolean)
     fun onAudioStreamChange(index: Int)
     fun onPreviewSelection()
+    fun onStopPreview()
+    fun onPreviewVolumeChange(volume: Int)
+    fun onPreviewVolumeCommitted()
+    fun onPreviewPositionChange(positionMs: Long)
 }
 
 data class HomeUiState(
@@ -89,6 +101,16 @@ data class HomeUiState(
     val whisperSettings: WhisperSettings = WhisperSettings(),
     val resultFiles: List<String> = emptyList(),
     val selectedAudioStreamIndex: Int? = null,
+    val preview: PreviewUiState = PreviewUiState(),
+)
+
+data class PreviewUiState(
+    val isPreparing: Boolean = false,
+    val isPlaying: Boolean = false,
+    val positionMs: Long = 0L,
+    val volume: Int = 70,
+    val currentFrame: ByteArray? = null,
+    val isPreviewFrameLoading: Boolean = false,
 )
 
 data class TrimParams(
@@ -124,6 +146,8 @@ class DefaultHomeComponent(
 ) : HomeComponent, ComponentContext by componentContext {
 
     private val scope = coroutineScope(SupervisorJob())
+    private var previewJob: Job? = null
+    private var currentFrameJob: Job? = null
 
     private val _state = MutableStateFlow(HomeUiState())
     override val state: StateFlow<HomeUiState> = _state.asStateFlow()
@@ -152,6 +176,7 @@ class DefaultHomeComponent(
     }
 
     override fun onTrimToggled(checked: Boolean) {
+        stopPreview(resetPosition = true)
         _state.update {
             it.copy(
                 trimSelected = checked,
@@ -173,6 +198,7 @@ class DefaultHomeComponent(
         val file = fileDialog.file
 
         if (directory != null && file != null) {
+            stopPreview(resetPosition = true)
             val path = Paths.get(directory, file).absolutePathString()
             _state.update {
                 it.copy(
@@ -181,6 +207,11 @@ class DefaultHomeComponent(
                     mediaInfo = null,
                     error = null,
                     successMessage = null,
+                    preview = it.preview.copy(
+                        positionMs = 0L,
+                        currentFrame = null,
+                        isPreviewFrameLoading = true,
+                    ),
                 )
             }
             addLog("Выбран входной файл: $path", LogLevel.INFO)
@@ -259,7 +290,6 @@ class DefaultHomeComponent(
             val path = Paths.get(directory, file).absolutePathString()
             _state.update { it.copy(audioFile = path) }
             addLog("Выбран аудио файл: $path", LogLevel.INFO)
-            getMediaInfo(path)
         } else {
             addLog("Не выбран аудио файл или директория.", LogLevel.WARNING)
         }
@@ -310,6 +340,28 @@ class DefaultHomeComponent(
                         }
                     }
                 }
+
+                if (mediaInfo.streams.any { it.codecType == "video" }) {
+                    ffmpegExecutor.createPreviewFrame(inputFile, 0L)
+                        .onSuccess { frame ->
+                            _state.update { current ->
+                                current.copy(preview = current.preview.copy(
+                                    isPreviewFrameLoading = false,
+                                    currentFrame = frame,
+                                ))
+                            }
+                        }
+                        .onFailure { error ->
+                            _state.update { current ->
+                                current.copy(preview = current.preview.copy(isPreviewFrameLoading = false))
+                            }
+                            addLog("Стоп-кадр недоступен: ${error.message}", LogLevel.WARNING)
+                        }
+                } else {
+                    _state.update { current ->
+                        current.copy(preview = current.preview.copy(isPreviewFrameLoading = false))
+                    }
+                }
             }.onFailure { error ->
                 _state.update {
                     it.copy(
@@ -323,6 +375,7 @@ class DefaultHomeComponent(
     }
 
     override fun onStartConversion() {
+        stopPreview(resetPosition = false)
         val currentState = _state.value
         val inputFile = currentState.inputFile
         val outputFile = currentState.outputFile
@@ -666,23 +719,47 @@ class DefaultHomeComponent(
     }
 
     override fun onTrimEndChange(trimEnd: Long?) {
+        if (_state.value.preview.isPlaying) stopPreview(resetPosition = false)
+        val current = _state.value
+        val durationMs = (current.totalDurationUs / 1_000L).coerceAtLeast(0L)
+        val minGapMs = minTrimGapMs(current)
+        val minEnd = ((current.trimParams.trimStartMs ?: 0L) + minGapMs).coerceAtMost(durationMs)
+        val normalizedEnd = trimEnd
+            ?.let { snapToTrimStep(it, current, durationMs) }
+            ?.coerceIn(minEnd, durationMs)
         _state.update {
             it.copy(
                 trimParams = it.trimParams.copy(
-                    trimEndMs = trimEnd
-                )
+                    trimEndMs = normalizedEnd
+                ),
+                preview = it.preview.copy(positionMs = normalizedEnd ?: it.preview.positionMs),
             )
         }
+        normalizedEnd?.let(::requestCurrentFrame)
     }
 
     override fun onTrimStartChange(startMs: Long?) {
+        if (_state.value.preview.isPlaying) stopPreview(resetPosition = false)
+        val current = _state.value
+        val durationMs = (current.totalDurationUs / 1_000L).coerceAtLeast(0L)
+        val currentEnd = current.trimParams.trimEndMs ?: durationMs
+        val maxStart = (currentEnd - minTrimGapMs(current)).coerceAtLeast(0L)
+        val normalizedStart = startMs
+            ?.let { snapToTrimStep(it, current, durationMs) }
+            ?.coerceIn(0L, maxStart)
         _state.update {
             it.copy(
                 trimParams = it.trimParams.copy(
-                    trimStartMs = startMs
-                )
+                    trimStartMs = normalizedStart
+                ),
+                preview = if (it.preview.isPlaying) {
+                    it.preview
+                } else {
+                    it.preview.copy(positionMs = normalizedStart ?: 0L)
+                },
             )
         }
+        normalizedStart?.let(::requestCurrentFrame)
     }
 
     override fun onTrimStrategyChange(trimStrategy: TrimStrategy) {
@@ -713,14 +790,124 @@ class DefaultHomeComponent(
     }
 
     override fun onPreviewSelection() {
-        val state = _state.value
-        val input = state.inputFile ?: return
-        scope.launch {
-            ffmpegExecutor.preview(
-                inputFile = input,
-                startMs = state.trimParams.trimStartMs ?: 0L,
-                endMs = state.trimParams.trimEndMs,
-            ).onFailure { addLog("Предпросмотр недоступен: ${it.message}", LogLevel.ERROR) }
+        if (_state.value.preview.isPlaying || _state.value.preview.isPreparing) {
+            stopPreview(resetPosition = false)
+        } else {
+            startPreview(_state.value.preview.positionMs)
         }
+    }
+
+    override fun onStopPreview() = stopPreview(resetPosition = true)
+
+    override fun onPreviewVolumeChange(volume: Int) {
+        _state.update { it.copy(preview = it.preview.copy(volume = volume.coerceIn(0, 100))) }
+    }
+
+    override fun onPreviewVolumeCommitted() {
+        val preview = _state.value.preview
+        if (preview.isPlaying) {
+            stopPreview(resetPosition = false)
+            startPreview(preview.positionMs)
+        }
+    }
+
+    override fun onPreviewPositionChange(positionMs: Long) {
+        if (_state.value.preview.isPlaying) stopPreview(resetPosition = false)
+        val durationMs = (_state.value.totalDurationUs / 1_000L).coerceAtLeast(0L)
+        val position = positionMs.coerceIn(0L, durationMs)
+        _state.update { it.copy(preview = it.preview.copy(positionMs = position)) }
+        requestCurrentFrame(position)
+    }
+
+    private fun requestCurrentFrame(positionMs: Long) {
+        val input = _state.value.inputFile ?: return
+        if (_state.value.mediaInfo?.streams?.none { it.codecType == "video" } != false) return
+        currentFrameJob?.cancel()
+        currentFrameJob = scope.launch {
+            delay(160)
+            ffmpegExecutor.createPreviewFrame(input, positionMs).onSuccess { frame ->
+                _state.update { it.copy(preview = it.preview.copy(currentFrame = frame)) }
+            }
+        }
+    }
+
+    private fun startPreview(requestedStartMs: Long) {
+        val current = _state.value
+        val input = current.inputFile ?: return
+        val rangeStart = current.trimParams.trimStartMs ?: 0L
+        val rangeEnd = current.trimParams.trimEndMs ?: (current.totalDurationUs / 1_000L)
+        val startMs = requestedStartMs.coerceIn(rangeStart, rangeEnd.coerceAtLeast(rangeStart))
+        previewJob?.cancel()
+        previewJob = scope.launch {
+            _state.update { it.copy(preview = it.preview.copy(isPreparing = true, positionMs = startMs)) }
+            val startedAt = System.currentTimeMillis()
+            val ticker = launch {
+                delay(250)
+                _state.update { it.copy(preview = it.preview.copy(isPreparing = false, isPlaying = true)) }
+                while (true) {
+                    val position = (startMs + System.currentTimeMillis() - startedAt).coerceAtMost(rangeEnd)
+                    _state.update { it.copy(preview = it.preview.copy(positionMs = position)) }
+                    delay(200)
+                }
+            }
+            val result = ffmpegExecutor.preview(
+                inputFile = input,
+                startMs = startMs,
+                endMs = rangeEnd,
+                volume = current.preview.volume,
+                hasVideo = current.mediaInfo?.streams?.any { it.codecType == "video" } == true,
+                onFrame = { frame ->
+                    _state.update { state -> state.copy(preview = state.preview.copy(currentFrame = frame)) }
+                },
+            )
+            ticker.cancel()
+            result.onFailure {
+                if (it !is CancellationException) addLog("Предпросмотр недоступен: ${it.message}", LogLevel.ERROR)
+            }
+            _state.update {
+                it.copy(preview = it.preview.copy(
+                    isPreparing = false,
+                    isPlaying = false,
+                    positionMs = rangeStart,
+                ))
+            }
+        }
+    }
+
+    private fun stopPreview(resetPosition: Boolean) {
+        ffmpegExecutor.stopPreview()
+        previewJob?.cancel()
+        previewJob = null
+        _state.update {
+            val start = it.trimParams.trimStartMs ?: 0L
+            it.copy(preview = it.preview.copy(
+                isPreparing = false,
+                isPlaying = false,
+                positionMs = if (resetPosition) start else it.preview.positionMs,
+            ))
+        }
+    }
+
+    private fun minTrimGapMs(state: HomeUiState): Long {
+        val fps = state.mediaInfo
+            ?.streams
+            ?.firstOrNull { it.codecType == "video" }
+            ?.let { video -> video.avgFrameRate.toFrameRate() ?: video.frameRate.toFrameRate() }
+
+        return fps
+            ?.takeIf { it > 0.0 && it < 1_000.0 }
+            ?.let { (1_000.0 / it).roundToLong().coerceAtLeast(1L) }
+            ?: MIN_TRIM_GAP_MS
+    }
+
+    private fun snapToTrimStep(positionMs: Long, state: HomeUiState, durationMs: Long): Long {
+        val stepMs = minTrimGapMs(state)
+        if (stepMs <= 1L) return positionMs.coerceIn(0L, durationMs)
+        val snapped = (positionMs.toDouble() / stepMs).roundToLong() * stepMs
+        return snapped.coerceIn(0L, durationMs)
+    }
+
+    private companion object {
+        const val MIN_TRIM_GAP_MS = 1L
     }
 }

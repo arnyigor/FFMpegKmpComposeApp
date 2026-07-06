@@ -4,11 +4,15 @@ import com.arny.ffmpegcompose.components.home.ConvertType
 import com.arny.ffmpegcompose.data.config.ConfigManager
 import com.arny.ffmpegcompose.data.models.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.BufferedReader
+import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
+import java.util.Locale
 
 class FFmpegExecutor(
     private val configManager: ConfigManager,
@@ -16,19 +20,37 @@ class FFmpegExecutor(
 ) {
 
     private var currentProcess: Process? = null
+    @Volatile
+    private var previewProcess: Process? = null
+    @Volatile
+    private var previewVideoProcess: Process? = null
     private val _isRunning = MutableStateFlow(false)
 
-    suspend fun preview(inputFile: String, startMs: Long, endMs: Long?): Result<Unit> =
+    suspend fun preview(
+        inputFile: String,
+        startMs: Long,
+        endMs: Long?,
+        volume: Int,
+        hasVideo: Boolean,
+        onFrame: (ByteArray) -> Unit,
+    ): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
+                stopPreview()
                 val ffmpegPath = configManager.getFfmpegPath() ?: error("FFmpeg не настроен")
                 val ffplayName = if (ffmpegPath.fileName.toString().endsWith(".exe", true)) "ffplay.exe" else "ffplay"
                 val ffplayPath = ffmpegPath.parent.resolve(ffplayName).toFile()
                 require(ffplayPath.isFile) { "Не найден ${ffplayPath.absolutePath}" }
-                val command = buildList {
+                val audioCommand = buildList {
                     add(ffplayPath.absolutePath)
                     add("-autoexit")
                     add("-hide_banner")
+                    add("-loglevel")
+                    add("error")
+                    add("-nostats")
+                    add("-nodisp")
+                    add("-volume")
+                    add(volume.coerceIn(0, 100).toString())
                     if (startMs > 0) {
                         add("-ss")
                         add(ConversionParams(
@@ -43,10 +65,130 @@ class FFmpegExecutor(
                     }
                     add(inputFile)
                 }
-                val exitCode = ProcessBuilder(command).start().waitFor()
-                check(exitCode == 0) { "ffplay завершился с кодом $exitCode" }
+                val videoProcess = if (hasVideo) {
+                    val videoCommand = buildList {
+                        add(ffmpegPath.toString())
+                        add("-hide_banner")
+                        add("-loglevel")
+                        add("error")
+                        add("-re")
+                        if (startMs > 0) {
+                            add("-ss")
+                            add(String.format(Locale.US, "%.3f", startMs / 1_000.0))
+                        }
+                        add("-i")
+                        add(inputFile)
+                        endMs?.takeIf { it > startMs }?.let {
+                            add("-t")
+                            add(String.format(Locale.US, "%.3f", (it - startMs) / 1_000.0))
+                        }
+                        add("-an")
+                        add("-vf")
+                        add("fps=24,scale=960:-2")
+                        add("-q:v")
+                        add("5")
+                        add("-f")
+                        add("image2pipe")
+                        add("-vcodec")
+                        add("mjpeg")
+                        add("pipe:1")
+                    }
+                    ProcessBuilder(videoCommand)
+                        .redirectError(ProcessBuilder.Redirect.DISCARD)
+                        .start()
+                        .also { previewVideoProcess = it }
+                } else null
+                val process = ProcessBuilder(audioCommand)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .start()
+                previewProcess = process
+                coroutineScope {
+                    val videoReader = videoProcess?.let { player ->
+                        launch(Dispatchers.IO) { readMjpegFrames(player.inputStream, onFrame) }
+                    }
+                    val exitCode = process.waitFor()
+                    val completedNormally = previewProcess === process
+                    if (completedNormally) previewProcess = null
+                    videoReader?.join()
+                    if (previewVideoProcess === videoProcess) previewVideoProcess = null
+                    check(exitCode == 0 || !completedNormally) { "ffplay завершился с кодом $exitCode" }
+                }
             }
         }
+
+    private fun readMjpegFrames(stream: java.io.InputStream, onFrame: (ByteArray) -> Unit) {
+        BufferedInputStream(stream, 128 * 1024).use { input ->
+            val frame = ByteArrayOutputStream(256 * 1024)
+            var previous = -1
+            var capturing = false
+            while (true) {
+                val current = input.read()
+                if (current < 0) break
+                if (!capturing) {
+                    if (previous == 0xFF && current == 0xD8) {
+                        frame.reset()
+                        frame.write(0xFF)
+                        frame.write(0xD8)
+                        capturing = true
+                    }
+                    previous = current
+                    continue
+                }
+                frame.write(current)
+                if (previous == 0xFF && current == 0xD9) {
+                    onFrame(frame.toByteArray())
+                    frame.reset()
+                    capturing = false
+                    previous = -1
+                } else {
+                    previous = current
+                }
+                if (frame.size() > 8 * 1024 * 1024) {
+                    frame.reset()
+                    capturing = false
+                    previous = -1
+                }
+            }
+        }
+    }
+
+    suspend fun createPreviewFrame(inputFile: String, positionMs: Long): Result<ByteArray> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val ffmpegPath = configManager.getFfmpegPath() ?: error("FFmpeg не настроен")
+                val command = listOf(
+                    ffmpegPath.toString(), "-hide_banner", "-loglevel", "error",
+                    "-ss", String.format(Locale.US, "%.3f", positionMs.coerceAtLeast(0L) / 1_000.0),
+                    "-i", inputFile,
+                    "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "4",
+                    "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
+                )
+                val process = ProcessBuilder(command)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .start()
+                val frame = process.inputStream.use { it.readBytes() }
+                check(process.waitFor() == 0 && frame.isNotEmpty()) { "Не удалось получить кадр" }
+                frame
+            }
+        }
+
+    fun stopPreview() {
+        val process = previewProcess
+        val videoProcess = previewVideoProcess
+        previewProcess = null
+        previewVideoProcess = null
+        process?.let {
+            runCatching {
+                it.outputStream.write("q\n".toByteArray())
+                it.outputStream.flush()
+            }
+            it.destroy()
+            if (it.isAlive) it.destroyForcibly()
+        }
+        videoProcess?.destroy()
+        if (videoProcess?.isAlive == true) videoProcess.destroyForcibly()
+    }
 
     /**
      * Получение информации о медиа файле (JSON)

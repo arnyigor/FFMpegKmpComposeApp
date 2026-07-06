@@ -1,7 +1,13 @@
 package com.arny.ffmpegcompose.ui.home
 
 import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.HorizontalScrollbar
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,8 +21,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.arny.ffmpegcompose.components.home.*
 import com.arny.ffmpegcompose.data.TimeUtils
@@ -24,6 +38,8 @@ import com.arny.ffmpegcompose.data.models.ProcessingPhase
 import com.arny.ffmpegcompose.data.models.TrimStrategy
 import com.arny.ffmpegcompose.data.models.WhisperModelOption
 import kotlin.math.roundToLong
+import kotlin.math.roundToInt
+import kotlin.math.abs
 
 @Composable
 fun HomeScreen(component: HomeComponent) {
@@ -57,44 +73,10 @@ fun HomeContent(state: HomeUiState, callbacks: HomeCallbacks) {
                 },
             )
         },
+        bottomBar = { ActionBar(state, callbacks) },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            Row(Modifier.weight(1f).fillMaxWidth()) {
-                val scroll = rememberScrollState()
-                Column(
-                    modifier = Modifier
-                        .weight(1.65f)
-                        .fillMaxHeight()
-                        .verticalScroll(scroll)
-                        .padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    SourceSection(state, callbacks)
-                    OperationSection(state, callbacks)
-                    if (state.trimSelected) TrimSection(state, callbacks)
-                    if (state.convertType == ConvertType.TRANSCRIBE) WhisperSection(state, callbacks)
-                    MediaInfoSection(state)
-                    if (state.isProcessing || state.processingProgress.phase != ProcessingPhase.IDLE) {
-                        ProcessingCard(state)
-                    }
-                    ResultCard(state, callbacks)
-                }
-
-                VerticalDivider()
-
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .verticalScroll(rememberScrollState())
-                        .padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    OutputSection(state, callbacks)
-                    ExtraOptionsSection(state, callbacks)
-                    StartSection(state, callbacks)
-                }
-            }
+            WorkflowContent(state, callbacks, Modifier.weight(1f).fillMaxWidth())
 
             if (logsExpanded) {
                 HorizontalDivider()
@@ -104,6 +86,84 @@ fun HomeContent(state: HomeUiState, callbacks: HomeCallbacks) {
                     modifier = Modifier.fillMaxWidth().height(230.dp),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun WorkflowContent(state: HomeUiState, callbacks: HomeCallbacks, modifier: Modifier = Modifier) {
+    BoxWithConstraints(modifier) {
+        val isWide = maxWidth >= 940.dp
+        if (isWide) {
+            Row(Modifier.fillMaxSize()) {
+                WorkflowMainColumn(
+                    state = state,
+                    callbacks = callbacks,
+                    modifier = Modifier.weight(1.55f).fillMaxHeight(),
+                )
+                VerticalDivider()
+                WorkflowSettingsColumn(
+                    state = state,
+                    callbacks = callbacks,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                )
+            }
+        } else {
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                SourceSection(state, callbacks)
+                OperationSection(state, callbacks)
+                OutputSection(state, callbacks)
+                ExtraOptionsSection(state, callbacks)
+                WorkflowDetails(state, callbacks)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkflowMainColumn(state: HomeUiState, callbacks: HomeCallbacks, modifier: Modifier = Modifier) {
+    Column(
+        modifier.verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        SourceSection(state, callbacks)
+        OperationSection(state, callbacks)
+        WorkflowDetails(state, callbacks)
+    }
+}
+
+@Composable
+private fun WorkflowSettingsColumn(state: HomeUiState, callbacks: HomeCallbacks, modifier: Modifier = Modifier) {
+    Column(
+        modifier.verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        OutputSection(state, callbacks)
+        ExtraOptionsSection(state, callbacks)
+        if (state.inputFile == null) {
+            HintCard("Начните с выбора видео или аудио — параметры и путь результата заполнятся автоматически.")
+        }
+    }
+}
+
+@Composable
+private fun WorkflowDetails(state: HomeUiState, callbacks: HomeCallbacks) {
+    if (state.mediaInfo != null) PreviewSection(state, callbacks)
+    if (state.convertType == ConvertType.TRANSCRIBE) WhisperSection(state, callbacks)
+    MediaInfoSection(state)
+    if (state.isProcessing || state.processingProgress.phase != ProcessingPhase.IDLE) ProcessingCard(state)
+    ResultCard(state, callbacks)
+}
+
+@Composable
+private fun HintCard(text: String) {
+    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.secondaryContainer) {
+        Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Icon(Icons.Default.TipsAndUpdates, contentDescription = null)
+            Text(text, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -139,8 +199,27 @@ private fun SourceSection(state: HomeUiState, callbacks: HomeCallbacks) {
                 Text(if (state.inputFile == null) "Выбрать видео или аудио" else "Выбрать другой файл")
             }
             state.inputFile?.let { path ->
-                Text(path.replace('\\', '/').substringAfterLast('/'), fontWeight = FontWeight.Medium)
-                Text(path, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                path.replace('\\', '/').substringAfterLast('/'),
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                path,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -151,37 +230,56 @@ private fun OperationSection(state: HomeUiState, callbacks: HomeCallbacks) {
     Card {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             SectionTitle("2", "Операция", "Выберите, что нужно получить")
-            ConvertType.entries.forEach { type ->
-                val icon = when (type) {
-                    ConvertType.STREAM_COPY -> Icons.Default.Bolt
-                    ConvertType.CONVERT -> Icons.Default.Transform
-                    ConvertType.AUDIO_EXTRACT -> Icons.Default.AudioFile
-                    ConvertType.TRANSCRIBE -> Icons.Default.Subtitles
-                }
-                Surface(
-                    modifier = Modifier.fillMaxWidth().clickable(enabled = !state.isProcessing) {
-                        callbacks.onChangeConvertType(type)
-                    },
-                    shape = MaterialTheme.shapes.medium,
-                    color = if (state.convertType == type) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else MaterialTheme.colorScheme.surfaceVariant,
-                ) {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
+            ConvertType.entries.chunked(2).forEach { rowTypes ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    rowTypes.forEach { type ->
+                        OperationCard(
+                            type = type,
                             selected = state.convertType == type,
                             enabled = !state.isProcessing,
                             onClick = { callbacks.onChangeConvertType(type) },
+                            modifier = Modifier.weight(1f),
                         )
-                        Icon(icon, contentDescription = null)
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(type.title, fontWeight = FontWeight.Medium)
-                            Text(operationHint(type), style = MaterialTheme.typography.bodySmall)
-                        }
                     }
+                    if (rowTypes.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun OperationCard(
+    type: ConvertType,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val icon = when (type) {
+        ConvertType.STREAM_COPY -> Icons.Default.Bolt
+        ConvertType.CONVERT -> Icons.Default.Transform
+        ConvertType.AUDIO_EXTRACT -> Icons.Default.AudioFile
+        ConvertType.TRANSCRIBE -> Icons.Default.Subtitles
+    }
+    Surface(
+        modifier = modifier.heightIn(min = 92.dp).clickable(enabled = enabled, onClick = onClick),
+        shape = MaterialTheme.shapes.medium,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        border = if (selected) CardDefaults.outlinedCardBorder() else null,
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, contentDescription = null, tint = if (selected) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+                Spacer(Modifier.width(8.dp))
+                Text(type.title, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                RadioButton(selected = selected, enabled = enabled, onClick = onClick)
+            }
+            Text(
+                operationHint(type),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -208,7 +306,13 @@ private fun OutputSection(state: HomeUiState, callbacks: HomeCallbacks) {
                 Text("Изменить путь")
             }
             state.outputFile?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
@@ -228,12 +332,18 @@ private fun ExtraOptionsSection(state: HomeUiState, callbacks: HomeCallbacks) {
                     callbacks::onAddAudioToggled,
                 )
                 if (state.replaceAudioSelected) {
-                    OutlinedButton(onClick = callbacks::onSelectAudioFile, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = callbacks::onSelectAudioFile,
+                        enabled = !state.isProcessing,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
                         Icon(Icons.Default.AudioFile, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(if (state.audioFile == null) "Выбрать аудио" else "Изменить аудио")
                     }
-                    state.audioFile?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    state.audioFile?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
         }
@@ -252,67 +362,418 @@ private fun LabeledSwitch(label: String, checked: Boolean, enabled: Boolean, onC
 }
 
 @Composable
-private fun TrimSection(state: HomeUiState, callbacks: HomeCallbacks) {
+private fun PreviewSection(state: HomeUiState, callbacks: HomeCallbacks) {
     val durationMs = (state.totalDurationUs / 1_000L).coerceAtLeast(0L)
     val startMs = state.trimParams.trimStartMs ?: 0L
     val endMs = state.trimParams.trimEndMs ?: durationMs
     Card {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Границы фрагмента", style = MaterialTheme.typography.titleMedium)
-            if (durationMs > 0) {
-                RangeSlider(
-                    value = startMs.toFloat()..endMs.toFloat(),
-                    onValueChange = { range ->
-                        callbacks.onTrimStartChange(range.start.roundToLong())
-                        callbacks.onTrimEndChange(range.endInclusive.roundToLong())
-                    },
-                    valueRange = 0f..durationMs.toFloat(),
-                    enabled = !state.isProcessing,
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                TimeInput(
-                    label = "Начало",
-                    valueMs = startMs,
-                    enabled = !state.isProcessing,
-                    modifier = Modifier.weight(1f),
-                    onTimeChange = callbacks::onTrimStartChange,
-                )
-                TimeInput(
-                    label = "Конец",
-                    valueMs = endMs,
-                    enabled = !state.isProcessing,
-                    modifier = Modifier.weight(1f),
-                    onTimeChange = callbacks::onTrimEndChange,
-                )
-            }
-            Text("Точность обрезки", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TrimStrategy.entries.forEach { strategy ->
-                    FilterChip(
-                        selected = state.trimParams.trimStrategy == strategy,
-                        onClick = { callbacks.onTrimStrategyChange(strategy) },
-                        label = { Text(strategyTitle(strategy)) },
+            Text(
+                if (state.trimSelected) "Предпросмотр и обрезка" else "Предпросмотр",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            TimelinePreview(state, callbacks, durationMs, startMs, endMs)
+            if (state.trimSelected) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    TimeInput(
+                        label = "Начало",
+                        valueMs = startMs,
                         enabled = !state.isProcessing,
+                        modifier = Modifier.weight(1f),
+                        onTimeChange = callbacks::onTrimStartChange,
+                    )
+                    TimeInput(
+                        label = "Конец",
+                        valueMs = endMs,
+                        enabled = !state.isProcessing,
+                        modifier = Modifier.weight(1f),
+                        onTimeChange = callbacks::onTrimEndChange,
                     )
                 }
-            }
-            Text(
-                "Выбрано: ${formatDurationMs((endMs - startMs).coerceAtLeast(0L))}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(
-                onClick = callbacks::onPreviewSelection,
-                enabled = !state.isProcessing && state.inputFile != null,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Default.PlayCircle, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Предпросмотр выбранного фрагмента")
+                Text("Точность обрезки", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TrimStrategy.entries.forEach { strategy ->
+                        FilterChip(
+                            selected = state.trimParams.trimStrategy == strategy,
+                            onClick = { callbacks.onTrimStrategyChange(strategy) },
+                            label = { Text(strategyTitle(strategy)) },
+                            enabled = !state.isProcessing,
+                        )
+                    }
+                }
             }
         }
     }
+}
+
+@Composable
+private fun TimelinePreview(
+    state: HomeUiState,
+    callbacks: HomeCallbacks,
+    durationMs: Long,
+    startMs: Long,
+    endMs: Long,
+) {
+    val preview = state.preview
+    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceVariant) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            val hasVideo = state.mediaInfo?.streams?.any { it.codecType == "video" } == true
+            if (hasVideo) {
+                val displayFrame = preview.currentFrame
+                Surface(
+                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                    color = Color.Black,
+                    shape = MaterialTheme.shapes.small,
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        if (displayFrame != null) {
+                            EncodedFrame(
+                                bytes = displayFrame,
+                                contentDescription = "Встроенный просмотр видео",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit,
+                            )
+                        } else if (preview.isPreparing || preview.isPreviewFrameLoading) {
+                            CircularProgressIndicator(color = Color.White)
+                        } else {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.Movie, contentDescription = null, tint = Color.White)
+                                Text("Нажмите «Воспроизвести»", color = Color.White)
+                            }
+                        }
+                    }
+                }
+            }
+            if (!hasVideo) {
+                Text(
+                    "Для аудиофайла доступен звуковой предпросмотр.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (durationMs > 0L) {
+                UnifiedTimeline(
+                    durationMs = durationMs,
+                    positionMs = preview.positionMs,
+                    startMs = startMs,
+                    endMs = endMs,
+                    trimEnabled = state.trimSelected,
+                    enabled = !state.isProcessing,
+                    autoScroll = preview.isPlaying,
+                    callbacks = callbacks,
+                )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(
+                    onClick = callbacks::onPreviewSelection,
+                    enabled = !state.isProcessing && state.inputFile != null && endMs > startMs,
+                ) {
+                    if (preview.isPreparing) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            if (preview.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = null,
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        when {
+                            preview.isPlaying || preview.isPreparing -> "Пауза"
+                            hasVideo -> "Воспроизвести"
+                            else -> "Слушать фрагмент"
+                        },
+                    )
+                }
+                IconButton(onClick = callbacks::onStopPreview, enabled = preview.isPlaying || preview.isPreparing) {
+                    Icon(Icons.Default.Stop, contentDescription = "Остановить предпросмотр")
+                }
+                Text(
+                    "${formatDurationMs(preview.positionMs)} / ${formatDurationMs(endMs)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(
+                    if (preview.volume == 0) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                    contentDescription = null,
+                )
+                Slider(
+                    value = preview.volume.toFloat(),
+                    onValueChange = { callbacks.onPreviewVolumeChange(it.toInt()) },
+                    onValueChangeFinished = callbacks::onPreviewVolumeCommitted,
+                    valueRange = 0f..100f,
+                    modifier = Modifier.weight(1f),
+                )
+                Text("${preview.volume}%", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(42.dp))
+            }
+            Text(
+                if (state.trimSelected) {
+                    "Белый playhead перематывает видео. Фиолетовый IN и красный OUT задают границы; пустая область прокручивает шкалу при масштабе >1."
+                } else {
+                    "Щёлкните или перетащите белый playhead для перемотки; пустая область прокручивает шкалу при масштабе >1."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun UnifiedTimeline(
+    durationMs: Long,
+    positionMs: Long,
+    startMs: Long,
+    endMs: Long,
+    trimEnabled: Boolean,
+    enabled: Boolean,
+    autoScroll: Boolean,
+    callbacks: HomeCallbacks,
+) {
+    val scrollState = rememberScrollState()
+    var zoom by remember { mutableFloatStateOf(1f) }
+    var userInteracting by remember { mutableStateOf(false) }
+    val density = LocalDensity.current
+    val startState by rememberUpdatedState(startMs)
+    val endState by rememberUpdatedState(endMs)
+    val positionState by rememberUpdatedState(positionMs)
+    val primary = MaterialTheme.colorScheme.primary
+    val endColor = MaterialTheme.colorScheme.error
+
+    LaunchedEffect(zoom) {
+        if (zoom <= 1f) scrollState.scrollTo(0)
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Масштаб", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+            TextButton(
+                onClick = { zoom = (zoom / 2f).coerceAtLeast(1f) },
+                enabled = zoom > 1f,
+                modifier = Modifier.width(34.dp).height(30.dp),
+                contentPadding = PaddingValues(0.dp),
+            ) {
+                Text("−")
+            }
+            Text("${zoom.toInt()}×", style = MaterialTheme.typography.labelMedium)
+            TextButton(
+                onClick = { zoom = (zoom * 2f).coerceAtMost(8f) },
+                enabled = zoom < 8f,
+                modifier = Modifier.width(34.dp).height(30.dp),
+                contentPadding = PaddingValues(0.dp),
+            ) {
+                Text("+")
+            }
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val viewportWidthPx = with(density) { maxWidth.toPx() }
+            val contentWidthPx = viewportWidthPx * zoom
+            val timelineWidth = maxWidth * zoom
+
+            LaunchedEffect(autoScroll, positionMs, durationMs, zoom, scrollState.maxValue, userInteracting) {
+                if (
+                    autoScroll &&
+                    durationMs > 0L &&
+                    zoom > 1f &&
+                    scrollState.maxValue > 0 &&
+                    !scrollState.isScrollInProgress &&
+                    !userInteracting
+                ) {
+                    val playheadPx = positionMs.coerceIn(0L, durationMs).toFloat() / durationMs * contentWidthPx
+                    val visibleStart = scrollState.value.toFloat()
+                    val visibleEnd = visibleStart + viewportWidthPx
+                    val margin = viewportWidthPx * 0.25f
+                    val target = when {
+                        playheadPx < visibleStart + margin -> playheadPx - margin
+                        playheadPx > visibleEnd - margin -> playheadPx - viewportWidthPx + margin
+                        else -> null
+                    }
+                    target?.let {
+                        scrollState.animateScrollTo(it.roundToInt().coerceIn(0, scrollState.maxValue))
+                    }
+                }
+            }
+
+            Row(Modifier.fillMaxWidth().horizontalScroll(scrollState)) {
+                Surface(color = Color(0xFF29272F), shape = MaterialTheme.shapes.small) {
+                    Canvas(
+                        Modifier
+                            .width(timelineWidth)
+                            .height(64.dp)
+                            .pointerInput(durationMs, enabled, trimEnabled) {
+                                if (!enabled || durationMs <= 0L) return@pointerInput
+                                val hitRadius = 24.dp.toPx()
+                                fun handleX(ms: Long): Float =
+                                    (ms.toFloat() / durationMs * size.width).coerceIn(12f, size.width - 12f)
+                                fun seekTo(x: Float) {
+                                    val time = (x.coerceIn(0f, size.width.toFloat()) / size.width * durationMs).roundToLong()
+                                    callbacks.onPreviewPositionChange(time)
+                                }
+                                detectTapGestures { offset ->
+                                    val startX = handleX(startState)
+                                    val endX = handleX(endState)
+                                    when {
+                                        trimEnabled && abs(offset.x - startX) <= hitRadius -> seekTo(startX)
+                                        trimEnabled && abs(offset.x - endX) <= hitRadius -> seekTo(endX)
+                                        else -> seekTo(offset.x)
+                                    }
+                                }
+                            }
+                            .pointerInput(durationMs, enabled, trimEnabled) {
+                                if (!enabled || durationMs <= 0L) return@pointerInput
+                                val hitRadius = 24.dp.toPx()
+                                var target = TimelineDragTarget.NONE
+                                var dragStartedAtX = 0f
+                                var dragStartedAtMs = 0L
+                                fun handleX(ms: Long): Float =
+                                    (ms.toFloat() / durationMs * size.width).coerceIn(12f, size.width - 12f)
+                                fun updateTarget(x: Float) {
+                                    when (target) {
+                                        TimelineDragTarget.START -> {
+                                            val delta = ((x - dragStartedAtX) / size.width * durationMs).roundToLong()
+                                            callbacks.onTrimStartChange((dragStartedAtMs + delta).coerceIn(0L, endState))
+                                        }
+                                        TimelineDragTarget.END -> {
+                                            val delta = ((x - dragStartedAtX) / size.width * durationMs).roundToLong()
+                                            callbacks.onTrimEndChange((dragStartedAtMs + delta).coerceIn(startState, durationMs))
+                                        }
+                                        TimelineDragTarget.PLAYHEAD -> {
+                                            val time = (x.coerceIn(0f, size.width.toFloat()) / size.width * durationMs).roundToLong()
+                                            callbacks.onPreviewPositionChange(time)
+                                        }
+                                        TimelineDragTarget.NONE -> Unit
+                                    }
+                                }
+                                detectDragGestures(
+                                    onDragStart = { offset ->
+                                        val startX = handleX(startState)
+                                        val endX = handleX(endState)
+                                        val playheadX = handleX(positionState.coerceIn(0L, durationMs))
+                                        target = when {
+                                            trimEnabled && abs(offset.x - startX) <= hitRadius && abs(offset.x - startX) <= abs(offset.x - endX) -> TimelineDragTarget.START
+                                            trimEnabled && abs(offset.x - endX) <= hitRadius -> TimelineDragTarget.END
+                                            abs(offset.x - playheadX) <= hitRadius -> TimelineDragTarget.PLAYHEAD
+                                            else -> TimelineDragTarget.NONE
+                                        }
+                                        userInteracting = target != TimelineDragTarget.NONE
+                                        dragStartedAtX = offset.x
+                                        dragStartedAtMs = when (target) {
+                                            TimelineDragTarget.START -> startState
+                                            TimelineDragTarget.END -> endState
+                                            else -> positionState
+                                        }
+                                        if (target == TimelineDragTarget.PLAYHEAD) updateTarget(offset.x)
+                                    },
+                                    onDragEnd = {
+                                        userInteracting = false
+                                        target = TimelineDragTarget.NONE
+                                    },
+                                    onDragCancel = {
+                                        userInteracting = false
+                                        target = TimelineDragTarget.NONE
+                                    },
+                                    onDrag = { change, _ ->
+                                        if (target != TimelineDragTarget.NONE) {
+                                            updateTarget(change.position.x)
+                                            change.consume()
+                                        }
+                                    },
+                                )
+                            },
+                    ) {
+                        if (durationMs <= 0L) return@Canvas
+                        val width = size.width
+                        val height = size.height
+                        val trackTop = 10f
+                        val trackBottom = height - 10f
+                        val trackHeight = trackBottom - trackTop
+                        val startX = startMs.toFloat() / durationMs * width
+                        val endX = endMs.toFloat() / durationMs * width
+                        val playheadX = positionMs.coerceIn(0L, durationMs).toFloat() / durationMs * width
+                        val startHandleX = startX.coerceIn(12f, width - 12f)
+                        val endHandleX = endX.coerceIn(12f, width - 12f)
+
+                        drawRect(Color.White.copy(alpha = 0.06f), topLeft = Offset(0f, trackTop), size = Size(width, trackHeight))
+                        repeat(11) { index ->
+                            val x = width * index / 10f
+                            drawLine(
+                                Color.White.copy(alpha = if (index % 5 == 0) 0.34f else 0.2f),
+                                Offset(x, trackTop),
+                                Offset(x, if (index % 5 == 0) trackBottom else trackTop + trackHeight * 0.42f),
+                                strokeWidth = 1f,
+                            )
+                        }
+                        if (trimEnabled) {
+                            drawRect(
+                                primary.copy(alpha = 0.30f),
+                                topLeft = Offset(startX.coerceIn(0f, width), trackTop),
+                                size = Size((endX - startX).coerceAtLeast(0f), trackHeight),
+                            )
+                            drawRect(
+                                Color.Black.copy(alpha = 0.58f),
+                                topLeft = Offset(0f, trackTop),
+                                size = Size(startX.coerceIn(0f, width), trackHeight),
+                            )
+                            drawRect(
+                                Color.Black.copy(alpha = 0.58f),
+                                topLeft = Offset(endX.coerceIn(0f, width), trackTop),
+                                size = Size((width - endX).coerceAtLeast(0f), trackHeight),
+                            )
+                            drawLine(primary, Offset(startHandleX, 0f), Offset(startHandleX, height), strokeWidth = 5f)
+                            drawCircle(primary, radius = 11f, center = Offset(startHandleX, 11f))
+                            drawCircle(Color.White, radius = 4f, center = Offset(startHandleX, 11f))
+                            drawLine(endColor, Offset(endHandleX, 0f), Offset(endHandleX, height), strokeWidth = 5f)
+                            drawCircle(endColor, radius = 11f, center = Offset(endHandleX, height - 11f))
+                            drawCircle(Color.White, radius = 4f, center = Offset(endHandleX, height - 11f))
+                        }
+                        drawLine(Color.White, Offset(playheadX, 0f), Offset(playheadX, height), strokeWidth = 2.5f)
+                        drawCircle(Color.White, radius = 7f, center = Offset(playheadX, height / 2f))
+                    }
+                }
+            }
+        }
+        HorizontalScrollbar(
+            adapter = rememberScrollbarAdapter(scrollState),
+            modifier = Modifier.fillMaxWidth().height(9.dp),
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Позиция ${formatDurationMs(positionMs)}", style = MaterialTheme.typography.labelMedium)
+            Text("Всего ${formatDurationMs(durationMs)}", style = MaterialTheme.typography.labelMedium)
+        }
+        if (trimEnabled) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("IN ${formatDurationMs(startMs)}", style = MaterialTheme.typography.labelMedium, color = primary)
+                Text("Выделено ${formatDurationMs((endMs - startMs).coerceAtLeast(0L))}", style = MaterialTheme.typography.labelMedium)
+                Text("OUT ${formatDurationMs(endMs)}", style = MaterialTheme.typography.labelMedium, color = endColor)
+            }
+        }
+    }
+}
+
+private enum class TimelineDragTarget { NONE, START, END, PLAYHEAD }
+
+@Composable
+private fun EncodedFrame(
+    bytes: ByteArray,
+    contentDescription: String,
+    modifier: Modifier,
+    contentScale: ContentScale,
+) {
+    val skiaImage = remember(bytes) { org.jetbrains.skia.Image.makeFromEncoded(bytes) }
+    val bitmap = remember(skiaImage) { skiaImage.toComposeImageBitmap() }
+    DisposableEffect(skiaImage) {
+        onDispose { skiaImage.close() }
+    }
+    Image(
+        bitmap = bitmap,
+        contentDescription = contentDescription,
+        modifier = modifier,
+        contentScale = contentScale,
+    )
 }
 
 private fun strategyTitle(strategy: TrimStrategy): String = when (strategy) {
@@ -336,7 +797,7 @@ private fun TimeInput(
             text = input
             runCatching { TimeUtils.parseToMs(input) }.onSuccess(onTimeChange)
         },
-        label = { Text("$label, ЧЧ:ММ:СС") },
+        label = { Text("$label, ЧЧ:ММ:СС.мс") },
         singleLine = true,
         enabled = enabled,
         modifier = modifier,
@@ -508,26 +969,56 @@ private fun ResultCard(state: HomeUiState, callbacks: HomeCallbacks) {
 }
 
 @Composable
-private fun StartSection(state: HomeUiState, callbacks: HomeCallbacks) {
-    if (state.isProcessing) {
-        Button(
-            onClick = callbacks::onCancelConversion,
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+private fun ActionBar(state: HomeUiState, callbacks: HomeCallbacks) {
+    val ready = state.inputFile != null && state.outputFile != null && state.mediaInfo != null
+    val status = when {
+        state.isProcessing -> state.processingProgress.phase.title
+        state.inputFile == null -> "Выберите исходный файл"
+        state.mediaInfo == null -> "Анализируем файл…"
+        state.outputFile == null -> "Укажите путь результата"
+        else -> "Всё готово к запуску"
+    }
+    Surface(tonalElevation = 6.dp, shadowElevation = 8.dp) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Icon(Icons.Default.Stop, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Остановить")
-        }
-    } else {
-        Button(
-            onClick = callbacks::onStartConversion,
-            enabled = state.inputFile != null && state.outputFile != null && state.mediaInfo != null,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
-        ) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(if (state.convertType == ConvertType.TRANSCRIBE) "Распознать речь" else "Начать обработку")
+            Icon(
+                if (ready || state.isProcessing) Icons.Default.CheckCircle else Icons.Default.Info,
+                contentDescription = null,
+                tint = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(Modifier.weight(1f)) {
+                Text(status, fontWeight = FontWeight.Medium)
+                if (ready && !state.isProcessing) {
+                    Text(
+                        state.outputFile.orEmpty().replace('\\', '/').substringAfterLast('/'),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Button(
+                onClick = if (state.isProcessing) callbacks::onCancelConversion else callbacks::onStartConversion,
+                enabled = state.isProcessing || ready,
+                colors = if (state.isProcessing) {
+                    ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                } else ButtonDefaults.buttonColors(),
+                modifier = Modifier.widthIn(min = 210.dp).heightIn(min = 50.dp),
+            ) {
+                Icon(if (state.isProcessing) Icons.Default.Stop else Icons.Default.PlayArrow, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    when {
+                        state.isProcessing -> "Остановить"
+                        state.convertType == ConvertType.TRANSCRIBE -> "Распознать речь"
+                        else -> "Начать обработку"
+                    },
+                )
+            }
         }
     }
 }
@@ -571,9 +1062,15 @@ private fun LogsPanel(logs: List<LogEntry>, onClear: () -> Unit, modifier: Modif
 }
 
 private fun formatDurationMs(value: Long): String {
-    val totalSeconds = value.coerceAtLeast(0L) / 1_000L
+    val safeValue = value.coerceAtLeast(0L)
+    val totalSeconds = safeValue / 1_000L
     val hours = totalSeconds / 3_600L
     val minutes = totalSeconds % 3_600L / 60L
     val seconds = totalSeconds % 60L
-    return "%02d:%02d:%02d".format(hours, minutes, seconds)
+    val millis = safeValue % 1_000L
+    return if (millis == 0L) {
+        "%02d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%02d:%02d:%02d.%03d".format(hours, minutes, seconds, millis)
+    }
 }

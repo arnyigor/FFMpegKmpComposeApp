@@ -94,12 +94,12 @@ private fun InitialSetupContent(
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = "FFmpeg Setup",
+            text = "Подготовка FFmpeg",
             style = MaterialTheme.typography.headlineLarge
         )
 
         Text(
-            text = "Настройка конвертера",
+            text = "Один раз настройте движок обработки медиа",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -118,7 +118,7 @@ private fun InitialSetupContent(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "Выберите способ настройки FFmpeg:",
+                    text = "Как подключить FFmpeg?",
                     style = MaterialTheme.typography.titleMedium
                 )
 
@@ -150,13 +150,13 @@ private fun InitialSetupContent(
                 ) {
                     Icon(Icons.Default.Download, contentDescription = null)
                     Spacer(Modifier.width(12.dp))
-                    Text("Скачать FFmpeg (~90 MB)")
+                    Text("Скачать автоматически (~90 МБ)")
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "FFmpeg будет загружен из официального источника",
+                    text = "Файлы сохранятся в рабочей папке приложения. Установка и системная Java не требуются.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
