@@ -41,7 +41,7 @@ data class ConversionParams(
     val audioFile: String? = null,
     val convertType: ConvertType,
     val replaceAudio: Boolean = false,
-    val videoCodec: VideoCodec = VideoCodec.LIBX264,
+    val videoCodec: VideoCodec = VideoCodec.LIBX265,
     val audioCodec: AudioCodec = AudioCodec.AAC,
     val preset: String = "medium",
     val crf: Int = 23,

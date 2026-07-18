@@ -326,6 +326,7 @@ class FFmpegExecutor(
         val effectiveStrategy = params.getEffectiveTrimStrategy()
         // Учитываем обе границы обрезки (начало или конец)
         val hasTrim = params.trimStartMs != null || params.trimEndMs != null
+        val outputAudioCodec = params.audioCodec.withContainerCompatibility(params.outputFile)
 
         /* ---------- 2. FAST‑seek (до -i) ---------- */
         if (hasTrim && effectiveStrategy == TrimStrategy.FAST) {
@@ -375,14 +376,25 @@ class FFmpegExecutor(
         when (params.convertType) {
             ConvertType.STREAM_COPY -> {
                 if (params.replaceAudio && params.audioFile != null) {
+                    val mp4LikeOutput = params.outputFile.isMp4LikeContainer()
                     add("-map"); add("0:v:0")
                     add("-map"); add("1:a:0")
-                    add("-map"); add("0:s?")
+                    if (!mp4LikeOutput) {
+                        add("-map"); add("0:s?")
+                    }
                     add("-map_metadata"); add("0")
                     add("-map_chapters"); add("0")
                     add("-c:v"); add(VideoCodec.COPY.codecName)
-                    add("-c:a"); add(params.audioCodec.codecName)
-                    add("-c:s"); add("copy")
+                    add("-c:a"); add(outputAudioCodec.codecName)
+                    if (outputAudioCodec == AudioCodec.AAC) {
+                        add("-b:a"); add("192k")
+                    }
+                    if (!mp4LikeOutput) {
+                        add("-c:s"); add("copy")
+                    }
+                    if (mp4LikeOutput) {
+                        add("-movflags"); add("+faststart")
+                    }
                 } else {
                     add("-map"); add("0")
                     add("-c"); add("copy")
@@ -401,10 +413,13 @@ class FFmpegExecutor(
                     add("-preset"); add(params.preset)
                     add("-crf"); add(params.crf.toString())
                 }
+                if (params.videoCodec == VideoCodec.LIBX265 && params.outputFile.isMp4LikeContainer()) {
+                    add("-tag:v"); add("hvc1")
+                }
 
                 // аудио‑кодек
-                add("-c:a"); add(params.audioCodec.codecName)
-                if (params.audioCodec == AudioCodec.AAC) {
+                add("-c:a"); add(outputAudioCodec.codecName)
+                if (outputAudioCodec == AudioCodec.AAC) {
                     add("-b:a"); add("192k")
                 }
             }
@@ -435,6 +450,17 @@ class FFmpegExecutor(
         add("-y")
         add(params.outputFile)
     }
+
+    private fun AudioCodec.withContainerCompatibility(outputFile: String): AudioCodec {
+        if (this == AudioCodec.COPY) return this
+        return when (outputFile.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+            "webm", "ogg", "opus" -> AudioCodec.OPUS
+            else -> this
+        }
+    }
+
+    private fun String.isMp4LikeContainer(): Boolean =
+        substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("mp4", "m4v", "mov")
 
     /**
      * Парсинг прогресса из key=value потока

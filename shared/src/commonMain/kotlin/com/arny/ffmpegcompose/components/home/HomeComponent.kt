@@ -154,11 +154,12 @@ class DefaultHomeComponent(
 
     override fun onChangeConvertType(type: ConvertType) {
         _state.update { state ->
+            val replaceAudio = state.replaceAudioSelected &&
+                    type != ConvertType.AUDIO_EXTRACT && type != ConvertType.TRANSCRIBE
             state.copy(
                 convertType = type,
-                outputFile = state.inputFile?.let { suggestedOutputPath(it, type) },
-                replaceAudioSelected = state.replaceAudioSelected &&
-                        type != ConvertType.AUDIO_EXTRACT && type != ConvertType.TRANSCRIBE,
+                outputFile = state.inputFile?.let { suggestedOutputPath(it, type, replaceAudio) },
+                replaceAudioSelected = replaceAudio,
                 error = null,
                 successMessage = null,
             )
@@ -167,7 +168,12 @@ class DefaultHomeComponent(
     }
 
     override fun onAddAudioToggled(checked: Boolean) {
-        _state.update { it.copy(replaceAudioSelected = checked) }
+        _state.update { state ->
+            state.copy(
+                replaceAudioSelected = checked,
+                outputFile = state.inputFile?.let { suggestedOutputPath(it, state.convertType, checked) } ?: state.outputFile,
+            )
+        }
         addLog(
             if (checked) "Включена замена аудио дорожки"
             else "Выключена замена аудио дорожки",
@@ -203,7 +209,7 @@ class DefaultHomeComponent(
             _state.update {
                 it.copy(
                     inputFile = path,
-                    outputFile = suggestedOutputPath(path, it.convertType),
+                    outputFile = suggestedOutputPath(path, it.convertType, it.replaceAudioSelected),
                     mediaInfo = null,
                     error = null,
                     successMessage = null,
@@ -240,9 +246,13 @@ class DefaultHomeComponent(
     override fun onSelectOutputFile() {
         val fileDialog = FileDialog(null as Frame?, "Сохранить как", FileDialog.SAVE)
         val extension = when (_state.value.convertType) {
-            ConvertType.STREAM_COPY -> _state.value.inputFile
-                ?.let { File(it).extension.takeIf(String::isNotBlank)?.let { ext -> ".$ext" } }
-                ?: ".mkv"
+            ConvertType.STREAM_COPY -> if (_state.value.replaceAudioSelected) {
+                ".mp4"
+            } else {
+                _state.value.inputFile
+                    ?.let { File(it).extension.takeIf(String::isNotBlank)?.let { ext -> ".$ext" } }
+                    ?: ".mkv"
+            }
             ConvertType.CONVERT -> ".mp4"
             ConvertType.AUDIO_EXTRACT -> ".wav"
             ConvertType.TRANSCRIBE -> ".srt"
@@ -265,12 +275,12 @@ class DefaultHomeComponent(
         }
     }
 
-    private fun suggestedOutputPath(inputPath: String, type: ConvertType): String {
+    private fun suggestedOutputPath(inputPath: String, type: ConvertType, replaceAudio: Boolean = false): String {
         val input = File(inputPath)
         val base = input.nameWithoutExtension.ifBlank { "output" }
         val sourceExtension = input.extension.takeIf(String::isNotBlank)?.let { ".$it" } ?: ".mkv"
         val suffix = when (type) {
-            ConvertType.STREAM_COPY -> "_copy$sourceExtension"
+            ConvertType.STREAM_COPY -> if (replaceAudio) "_audio_replaced.mp4" else "_copy$sourceExtension"
             ConvertType.CONVERT -> "_converted.mp4"
             ConvertType.AUDIO_EXTRACT -> "_audio.wav"
             ConvertType.TRANSCRIBE -> "_transcript.srt"
@@ -446,11 +456,11 @@ class DefaultHomeComponent(
                 replaceAudio = currentState.replaceAudioSelected,
                 videoCodec = when (currentState.convertType) {
                     ConvertType.STREAM_COPY, ConvertType.AUDIO_EXTRACT, ConvertType.TRANSCRIBE -> VideoCodec.COPY
-                    ConvertType.CONVERT -> VideoCodec.LIBX264
+                    ConvertType.CONVERT -> VideoCodec.LIBX265
                 },
                 audioCodec = when (currentState.convertType) {
                     ConvertType.STREAM_COPY if !currentState.replaceAudioSelected -> AudioCodec.COPY
-                    ConvertType.STREAM_COPY -> AudioCodec.AAC
+                    ConvertType.STREAM_COPY -> replacementAudioCodecForOutput(outputFile)
                     ConvertType.AUDIO_EXTRACT -> AudioCodec.WAV
                     ConvertType.TRANSCRIBE -> AudioCodec.WAV
                     ConvertType.CONVERT -> AudioCodec.AAC
@@ -640,6 +650,12 @@ class DefaultHomeComponent(
         val endUs = (state.trimParams.trimEndMs?.times(1_000L) ?: state.totalDurationUs)
         return (endUs - startUs).coerceAtLeast(0L)
     }
+
+    private fun replacementAudioCodecForOutput(outputFile: String): AudioCodec =
+        when (File(outputFile).extension.lowercase(Locale.ROOT)) {
+            "webm", "ogg", "opus" -> AudioCodec.OPUS
+            else -> AudioCodec.AAC
+        }
 
     override fun onCancelConversion() {
         ffmpegExecutor.cancel()

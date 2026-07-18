@@ -343,6 +343,13 @@ private fun ExtraOptionsSection(state: HomeUiState, callbacks: HomeCallbacks) {
                         Spacer(Modifier.width(8.dp))
                         Text(if (state.audioFile == null) "Выбрать аудио" else "Изменить аудио")
                     }
+                    if (state.convertType == ConvertType.STREAM_COPY) {
+                        Text(
+                            "Видео будет скопировано без перекодирования, результат — MP4, новая аудиодорожка — AAC.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     state.audioFile?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
