@@ -1,0 +1,64 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v1.1.0"
+        required: true
+        default: "v1.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows portable package
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build portable Windows package
+        run: .\gradlew.bat :desktopApp:packagePortable --no-daemon
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FFmpegMediaWorkshop-windows-x64-portable
+          path: desktopApp/build/compose/binaries/main/portable/*.zip
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: FFmpeg Media Workshop ${{ github.event.inputs.tag || github.ref_name }}
+          files: desktopApp/build/compose/binaries/main/portable/*.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## Windows portable release
+
+            Download and unpack `FFmpegMediaWorkshop-1.1.0-windows-x64-portable.zip`, then run `FFmpegMediaWorkshop.exe`.
+
+            ### Highlights
+            - FFmpeg conversion and stream copy.
+            - MP4 audio replacement with video stream copy.
+            - Trimming and preview.
+            - Offline Whisper transcription.
+            - Experimental smart voice replacement with Demucs.
