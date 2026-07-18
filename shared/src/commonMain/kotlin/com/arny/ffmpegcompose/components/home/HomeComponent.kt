@@ -4,6 +4,7 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.coroutines.coroutineScope
 import com.arny.ffmpegcompose.components.utils.*
 import com.arny.ffmpegcompose.data.FFmpegExecutor
+import com.arny.ffmpegcompose.data.SmartVoiceExecutor
 import com.arny.ffmpegcompose.data.WhisperExecutor
 import com.arny.ffmpegcompose.data.models.*
 import kotlinx.coroutines.SupervisorJob
@@ -40,6 +41,7 @@ object EmptyHomeCallbacks : HomeCallbacks {
     override fun onClearLogs() {}
     override fun onOpenOutputFolder() {}
     override fun onAddAudioToggled(checked: Boolean) {}
+    override fun onSmartVoiceToggled(checked: Boolean) {}
     override fun onTrimToggled(checked: Boolean) {}
     override fun onChangeConvertType(type: ConvertType) {}
     override fun onTrimEndChange(trimEnd: Long?) {}
@@ -48,6 +50,10 @@ object EmptyHomeCallbacks : HomeCallbacks {
     override fun onWhisperModelChange(model: WhisperModelOption) {}
     override fun onWhisperLanguageChange(language: String) {}
     override fun onWordTimestampsToggled(checked: Boolean) {}
+    override fun onOriginalVoiceVolumeChange(percent: Int) {}
+    override fun onReplacementVoiceVolumeChange(percent: Int) {}
+    override fun onSmartVoiceDeviceChange(device: SmartVoiceDevice) {}
+    override fun onSmartVoiceModelChange(model: SmartVoiceSeparationModel) {}
     override fun onAudioStreamChange(index: Int) {}
     override fun onPreviewSelection() {}
     override fun onStopPreview() {}
@@ -66,6 +72,7 @@ interface HomeCallbacks {
     fun onClearLogs()
     fun onOpenOutputFolder()
     fun onAddAudioToggled(checked: Boolean)
+    fun onSmartVoiceToggled(checked: Boolean)
     fun onTrimToggled(checked: Boolean)
     fun onChangeConvertType(type: ConvertType)
     fun onTrimStartChange(startMs: Long?)
@@ -74,6 +81,10 @@ interface HomeCallbacks {
     fun onWhisperModelChange(model: WhisperModelOption)
     fun onWhisperLanguageChange(language: String)
     fun onWordTimestampsToggled(checked: Boolean)
+    fun onOriginalVoiceVolumeChange(percent: Int)
+    fun onReplacementVoiceVolumeChange(percent: Int)
+    fun onSmartVoiceDeviceChange(device: SmartVoiceDevice)
+    fun onSmartVoiceModelChange(model: SmartVoiceSeparationModel)
     fun onAudioStreamChange(index: Int)
     fun onPreviewSelection()
     fun onStopPreview()
@@ -88,6 +99,7 @@ data class HomeUiState(
     val outputFile: String? = null,
     val audioFile: String? = null,
     val replaceAudioSelected: Boolean = false,
+    val smartVoiceReplacementSelected: Boolean = false,
     val trimSelected: Boolean = false,
     val mediaInfo: MediaInfo? = null,
     val conversionProgress: ConversionProgress? = null,
@@ -99,6 +111,7 @@ data class HomeUiState(
     val trimParams: TrimParams = TrimParams(),
     val processingProgress: ProcessingProgress = ProcessingProgress(),
     val whisperSettings: WhisperSettings = WhisperSettings(),
+    val smartVoiceSettings: SmartVoiceSettings = SmartVoiceSettings(),
     val resultFiles: List<String> = emptyList(),
     val selectedAudioStreamIndex: Int? = null,
     val preview: PreviewUiState = PreviewUiState(),
@@ -143,6 +156,7 @@ class DefaultHomeComponent(
     componentContext: ComponentContext,
     private val ffmpegExecutor: FFmpegExecutor,
     private val whisperExecutor: WhisperExecutor,
+    private val smartVoiceExecutor: SmartVoiceExecutor,
 ) : HomeComponent, ComponentContext by componentContext {
 
     private val scope = coroutineScope(SupervisorJob())
@@ -154,12 +168,14 @@ class DefaultHomeComponent(
 
     override fun onChangeConvertType(type: ConvertType) {
         _state.update { state ->
-            val replaceAudio = state.replaceAudioSelected &&
-                    type != ConvertType.AUDIO_EXTRACT && type != ConvertType.TRANSCRIBE
+            val supportsAudioReplacement = type != ConvertType.AUDIO_EXTRACT && type != ConvertType.TRANSCRIBE
+            val replaceAudio = state.replaceAudioSelected && supportsAudioReplacement
+            val smartVoice = state.smartVoiceReplacementSelected && supportsAudioReplacement
             state.copy(
                 convertType = type,
-                outputFile = state.inputFile?.let { suggestedOutputPath(it, type, replaceAudio) },
+                outputFile = state.inputFile?.let { suggestedOutputPath(it, type, replaceAudio, smartVoice) },
                 replaceAudioSelected = replaceAudio,
+                smartVoiceReplacementSelected = smartVoice,
                 error = null,
                 successMessage = null,
             )
@@ -171,12 +187,28 @@ class DefaultHomeComponent(
         _state.update { state ->
             state.copy(
                 replaceAudioSelected = checked,
-                outputFile = state.inputFile?.let { suggestedOutputPath(it, state.convertType, checked) } ?: state.outputFile,
+                smartVoiceReplacementSelected = if (checked) false else state.smartVoiceReplacementSelected,
+                outputFile = state.inputFile?.let { suggestedOutputPath(it, state.convertType, checked, false) } ?: state.outputFile,
             )
         }
         addLog(
             if (checked) "Включена замена аудио дорожки"
             else "Выключена замена аудио дорожки",
+            LogLevel.INFO
+        )
+    }
+
+    override fun onSmartVoiceToggled(checked: Boolean) {
+        _state.update { state ->
+            state.copy(
+                smartVoiceReplacementSelected = checked,
+                replaceAudioSelected = if (checked) false else state.replaceAudioSelected,
+                outputFile = state.inputFile?.let { suggestedOutputPath(it, state.convertType, false, checked) } ?: state.outputFile,
+            )
+        }
+        addLog(
+            if (checked) "Включена умная замена голоса"
+            else "Выключена умная замена голоса",
             LogLevel.INFO
         )
     }
@@ -209,7 +241,7 @@ class DefaultHomeComponent(
             _state.update {
                 it.copy(
                     inputFile = path,
-                    outputFile = suggestedOutputPath(path, it.convertType, it.replaceAudioSelected),
+                    outputFile = suggestedOutputPath(path, it.convertType, it.replaceAudioSelected, it.smartVoiceReplacementSelected),
                     mediaInfo = null,
                     error = null,
                     successMessage = null,
@@ -245,7 +277,9 @@ class DefaultHomeComponent(
 
     override fun onSelectOutputFile() {
         val fileDialog = FileDialog(null as Frame?, "Сохранить как", FileDialog.SAVE)
-        val extension = when (_state.value.convertType) {
+        val extension = if (_state.value.smartVoiceReplacementSelected) {
+            ".mp4"
+        } else when (_state.value.convertType) {
             ConvertType.STREAM_COPY -> if (_state.value.replaceAudioSelected) {
                 ".mp4"
             } else {
@@ -275,11 +309,18 @@ class DefaultHomeComponent(
         }
     }
 
-    private fun suggestedOutputPath(inputPath: String, type: ConvertType, replaceAudio: Boolean = false): String {
+    private fun suggestedOutputPath(
+        inputPath: String,
+        type: ConvertType,
+        replaceAudio: Boolean = false,
+        smartVoice: Boolean = false,
+    ): String {
         val input = File(inputPath)
         val base = input.nameWithoutExtension.ifBlank { "output" }
         val sourceExtension = input.extension.takeIf(String::isNotBlank)?.let { ".$it" } ?: ".mkv"
-        val suffix = when (type) {
+        val suffix = if (smartVoice) {
+            "_smart_voice.mp4"
+        } else when (type) {
             ConvertType.STREAM_COPY -> if (replaceAudio) "_audio_replaced.mp4" else "_copy$sourceExtension"
             ConvertType.CONVERT -> "_converted.mp4"
             ConvertType.AUDIO_EXTRACT -> "_audio.wav"
@@ -401,7 +442,7 @@ class DefaultHomeComponent(
         }
 
         // Валидация для замены аудио
-        if (currentState.replaceAudioSelected && currentState.audioFile == null) {
+        if ((currentState.replaceAudioSelected || currentState.smartVoiceReplacementSelected) && currentState.audioFile == null) {
             addLog("✗ Не выбран аудио файл для замены", LogLevel.ERROR)
             _state.update { it.copy(error = "Выберите аудио файл для замены") }
             return
@@ -426,10 +467,10 @@ class DefaultHomeComponent(
                     conversionProgress = null,
                     resultFiles = emptyList(),
                     processingProgress = ProcessingProgress(
-                        phase = if (currentState.convertType == ConvertType.TRANSCRIBE) {
-                            ProcessingPhase.EXTRACTING_AUDIO
-                        } else {
-                            ProcessingPhase.CONVERTING
+                        phase = when {
+                            currentState.convertType == ConvertType.TRANSCRIBE -> ProcessingPhase.EXTRACTING_AUDIO
+                            currentState.smartVoiceReplacementSelected -> ProcessingPhase.EXTRACTING_AUDIO
+                            else -> ProcessingPhase.CONVERTING
                         },
                     ),
                 )
@@ -438,12 +479,17 @@ class DefaultHomeComponent(
             addLog("=== НАЧАЛО КОНВЕРТАЦИИ ===", LogLevel.INFO)
             addLog("Режим: ${currentState.convertType.title}", LogLevel.INFO)
 
-            if (currentState.replaceAudioSelected) {
-                addLog("Замена аудио: ${currentState.audioFile}", LogLevel.INFO)
+            when {
+                currentState.smartVoiceReplacementSelected -> addLog("Умная замена голоса: ${currentState.audioFile}", LogLevel.INFO)
+                currentState.replaceAudioSelected -> addLog("Замена аудио: ${currentState.audioFile}", LogLevel.INFO)
             }
 
             if (currentState.convertType == ConvertType.TRANSCRIBE) {
                 runTranscription(currentState, inputFile, outputFile)
+                return@launch
+            }
+            if (currentState.smartVoiceReplacementSelected) {
+                runSmartVoiceReplacement(currentState, inputFile, outputFile)
                 return@launch
             }
 
@@ -535,6 +581,138 @@ class DefaultHomeComponent(
                 addLog("=== ОШИБКА КОНВЕРТАЦИИ ===", LogLevel.ERROR)
                 addLog("✗ ${error.message}", LogLevel.ERROR)
             }
+        }
+    }
+
+    private suspend fun runSmartVoiceReplacement(state: HomeUiState, inputFile: String, outputFile: String) {
+        val startedAt = System.currentTimeMillis()
+        val output = File(outputFile)
+        val workDir = File(output.parentFile ?: File("."), "${output.nameWithoutExtension}_smart_voice_work").apply { mkdirs() }
+        val sourceAudio = File(workDir, "source.wav")
+        val replacementAudio = requireNotNull(state.audioFile) { "Выберите аудио файл для замены" }
+        try {
+            addLog("Рабочая папка умной замены: ${workDir.absolutePath}", LogLevel.INFO)
+            val extractionParams = ConversionParams(
+                inputFile = inputFile,
+                outputFile = sourceAudio.absolutePath,
+                convertType = ConvertType.AUDIO_EXTRACT,
+                videoCodec = VideoCodec.COPY,
+                audioCodec = AudioCodec.WAV,
+                audioStreamIndex = state.selectedAudioStreamIndex,
+                trimStartMs = state.trimParams.trimStartMs.takeIf { state.trimSelected },
+                trimEndMs = state.trimParams.trimEndMs.takeIf { state.trimSelected },
+                trimStrategy = TrimStrategy.ACCURATE,
+                totalDurationUs = targetDurationUs(state),
+            )
+            ffmpegExecutor.convertWithProgress(
+                params = extractionParams,
+                onProgress = { progress ->
+                    val fraction = if (extractionParams.totalDurationUs > 0) {
+                        (progress.outTimeUs.toDouble() / extractionParams.totalDurationUs).toFloat().coerceIn(0f, 1f)
+                    } else null
+                    _state.update {
+                        it.copy(
+                            conversionProgress = progress,
+                            processingProgress = ProcessingProgress(
+                                phase = ProcessingPhase.EXTRACTING_AUDIO,
+                                phaseProgress = fraction,
+                                overallProgress = fraction?.times(0.15f),
+                                elapsedMs = System.currentTimeMillis() - startedAt,
+                                detail = "Подготовка оригинальной аудиодорожки",
+                            ),
+                        )
+                    }
+                },
+                onLog = { addLog(it, LogLevel.DEBUG) },
+            ).getOrThrow()
+
+            val stems = smartVoiceExecutor.separateVocals(
+                audioFile = sourceAudio.absolutePath,
+                workDir = workDir,
+                device = state.smartVoiceSettings.device,
+                model = state.smartVoiceSettings.model,
+                onProgress = { phase, fraction, detail ->
+                    if (!_state.value.isProcessing || _state.value.processingProgress.phase == ProcessingPhase.CANCELLED) return@separateVocals
+                    _state.update {
+                        it.copy(
+                            processingProgress = ProcessingProgress(
+                                phase = phase,
+                                phaseProgress = fraction,
+                                overallProgress = 0.15f + (fraction ?: 0f) * 0.60f,
+                                elapsedMs = System.currentTimeMillis() - startedAt,
+                                detail = detail,
+                            ),
+                        )
+                    }
+                },
+                onLog = { addLog(it, LogLevel.DEBUG) },
+            ).getOrThrow()
+
+            val mixParamsTotalUs = targetDurationUs(state)
+            ffmpegExecutor.mixSmartVoiceReplacement(
+                inputFile = inputFile,
+                outputFile = outputFile,
+                backgroundAudioFile = stems.backgroundFile,
+                originalVoiceFile = stems.vocalsFile,
+                replacementVoiceFile = replacementAudio,
+                originalVoiceVolumePercent = state.smartVoiceSettings.originalVoiceVolumePercent,
+                replacementVoiceVolumePercent = state.smartVoiceSettings.replacementVoiceVolumePercent,
+                videoCodec = when (state.convertType) {
+                    ConvertType.CONVERT -> VideoCodec.LIBX265
+                    else -> VideoCodec.COPY
+                },
+                preset = "medium",
+                crf = 23,
+                trimStartMs = state.trimParams.trimStartMs.takeIf { state.trimSelected },
+                trimEndMs = state.trimParams.trimEndMs.takeIf { state.trimSelected },
+                onProgress = { progress ->
+                    val fraction = if (mixParamsTotalUs > 0) {
+                        (progress.outTimeUs.toDouble() / mixParamsTotalUs).toFloat().coerceIn(0f, 1f)
+                    } else null
+                    _state.update {
+                        it.copy(
+                            conversionProgress = progress,
+                            processingProgress = ProcessingProgress(
+                                phase = ProcessingPhase.MIXING_AUDIO,
+                                phaseProgress = fraction,
+                                overallProgress = 0.75f + (fraction ?: 0f) * 0.25f,
+                                elapsedMs = System.currentTimeMillis() - startedAt,
+                                detail = "Сведение фона, приглушённого оригинала и нового голоса",
+                            ),
+                        )
+                    }
+                },
+                onLog = { addLog(it, LogLevel.DEBUG) },
+            ).getOrThrow()
+
+            _state.update {
+                it.copy(
+                    isProcessing = false,
+                    successMessage = "Умная замена голоса завершена: $outputFile",
+                    resultFiles = listOf(outputFile, stems.backgroundFile, stems.vocalsFile),
+                    processingProgress = ProcessingProgress(
+                        phase = ProcessingPhase.COMPLETED,
+                        phaseProgress = 1f,
+                        overallProgress = 1f,
+                        elapsedMs = System.currentTimeMillis() - startedAt,
+                        estimatedRemainingMs = 0L,
+                        detail = "Видео + фон + новый голос",
+                    ),
+                )
+            }
+            addLog("=== УМНАЯ ЗАМЕНА ГОЛОСА ЗАВЕРШЕНА ===", LogLevel.SUCCESS)
+            addLog(outputFile, LogLevel.SUCCESS)
+            onOpenFolder(outputFile)
+        } catch (error: Exception) {
+            if (!_state.value.isProcessing || _state.value.processingProgress.phase == ProcessingPhase.CANCELLED) return
+            _state.update {
+                it.copy(
+                    isProcessing = false,
+                    error = error.message ?: "Ошибка умной замены голоса",
+                    processingProgress = it.processingProgress.copy(phase = ProcessingPhase.FAILED),
+                )
+            }
+            addLog("Ошибка умной замены голоса: ${error.message}", LogLevel.ERROR)
         }
     }
 
@@ -660,6 +838,7 @@ class DefaultHomeComponent(
     override fun onCancelConversion() {
         ffmpegExecutor.cancel()
         whisperExecutor.cancel()
+        smartVoiceExecutor.cancel()
         _state.update {
             it.copy(
                 isProcessing = false,
@@ -799,6 +978,36 @@ class DefaultHomeComponent(
 
     override fun onWordTimestampsToggled(checked: Boolean) {
         _state.update { it.copy(whisperSettings = it.whisperSettings.copy(wordTimestamps = checked)) }
+    }
+
+    override fun onOriginalVoiceVolumeChange(percent: Int) {
+        _state.update {
+            it.copy(
+                smartVoiceSettings = it.smartVoiceSettings.copy(
+                    originalVoiceVolumePercent = percent.coerceIn(0, 100),
+                ),
+            )
+        }
+    }
+
+    override fun onReplacementVoiceVolumeChange(percent: Int) {
+        _state.update {
+            it.copy(
+                smartVoiceSettings = it.smartVoiceSettings.copy(
+                    replacementVoiceVolumePercent = percent.coerceIn(0, 200),
+                ),
+            )
+        }
+    }
+
+    override fun onSmartVoiceDeviceChange(device: SmartVoiceDevice) {
+        _state.update { it.copy(smartVoiceSettings = it.smartVoiceSettings.copy(device = device)) }
+        addLog("Устройство умной замены голоса: ${device.title}", LogLevel.INFO)
+    }
+
+    override fun onSmartVoiceModelChange(model: SmartVoiceSeparationModel) {
+        _state.update { it.copy(smartVoiceSettings = it.smartVoiceSettings.copy(model = model)) }
+        addLog("Модель разделения голоса: ${model.title}", LogLevel.INFO)
     }
 
     override fun onAudioStreamChange(index: Int) {

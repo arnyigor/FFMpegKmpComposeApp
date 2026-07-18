@@ -1,6 +1,7 @@
 package com.arny.ffmpegcompose.di
 
 import com.arny.ffmpegcompose.data.FFmpegExecutor
+import com.arny.ffmpegcompose.data.SmartVoiceExecutor
 import com.arny.ffmpegcompose.data.WhisperExecutor
 import com.arny.ffmpegcompose.data.config.ConfigManager
 import com.arny.ffmpegcompose.data.models.FFmpegManager
@@ -29,6 +30,8 @@ val dataModule = module {
     }
 
     single { WhisperExecutor(json = get()) }
+
+    single { SmartVoiceExecutor() }
 }
 
 val commonModules = listOf(dataModule)

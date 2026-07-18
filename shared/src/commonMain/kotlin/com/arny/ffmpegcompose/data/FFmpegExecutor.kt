@@ -309,6 +309,114 @@ class FFmpegExecutor(
         }
     }
 
+    suspend fun mixSmartVoiceReplacement(
+        inputFile: String,
+        outputFile: String,
+        backgroundAudioFile: String,
+        originalVoiceFile: String,
+        replacementVoiceFile: String,
+        originalVoiceVolumePercent: Int,
+        replacementVoiceVolumePercent: Int,
+        videoCodec: VideoCodec,
+        preset: String,
+        crf: Int,
+        trimStartMs: Long?,
+        trimEndMs: Long?,
+        onProgress: (ConversionProgress) -> Unit,
+        onLog: (String) -> Unit,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            if (!configManager.isFfmpegConfigured()) {
+                return@withContext Result.failure(Exception("ffmpeg.exe не найден"))
+            }
+            _isRunning.value = true
+            val helperParams = ConversionParams(
+                inputFile = inputFile,
+                outputFile = outputFile,
+                convertType = ConvertType.STREAM_COPY,
+            )
+            val originalVoiceVolume = originalVoiceVolumePercent.coerceIn(0, 100) / 100.0
+            val replacementVoiceVolume = replacementVoiceVolumePercent.coerceIn(0, 200) / 100.0
+            val command = buildList {
+                add(configManager.getFfmpegPath().toString())
+                trimStartMs?.let { startMs ->
+                    add("-ss")
+                    add(helperParams.formatTimeMs(startMs))
+                }
+                add("-i"); add(inputFile)
+                add("-i"); add(backgroundAudioFile)
+                add("-i"); add(originalVoiceFile)
+                add("-i"); add(replacementVoiceFile)
+                val durationMs = when {
+                    trimStartMs != null && trimEndMs != null -> trimEndMs - trimStartMs
+                    trimEndMs != null -> trimEndMs
+                    else -> null
+                }
+                durationMs?.takeIf { it > 0L }?.let {
+                    add("-t")
+                    add(helperParams.formatTimeMs(it))
+                }
+                add("-filter_complex")
+                add(
+                    "[1:a]volume=1.000[bg];" +
+                            "[2:a]volume=${String.format(Locale.US, "%.3f", originalVoiceVolume)}[ov];" +
+                            "[3:a]volume=${String.format(Locale.US, "%.3f", replacementVoiceVolume)}[nv];" +
+                            "[bg][ov][nv]amix=inputs=3:duration=first:dropout_transition=0," +
+                            "loudnorm=I=-16:LRA=11:TP=-1.5[aout]"
+                )
+                add("-map"); add("0:v:0?")
+                add("-map"); add("[aout]")
+                add("-map_metadata"); add("0")
+                add("-c:v"); add(videoCodec.codecName)
+                if (videoCodec in listOf(VideoCodec.LIBX264, VideoCodec.LIBX265)) {
+                    add("-preset"); add(preset)
+                    add("-crf"); add(crf.toString())
+                }
+                if (videoCodec == VideoCodec.LIBX265 && outputFile.isMp4LikeContainer()) {
+                    add("-tag:v"); add("hvc1")
+                }
+                add("-c:a"); add(AudioCodec.AAC.codecName)
+                add("-b:a"); add("192k")
+                add("-shortest")
+                if (outputFile.isMp4LikeContainer()) {
+                    add("-movflags"); add("+faststart")
+                }
+                add("-progress"); add("-")
+                add("-nostats")
+                add("-y")
+                add(outputFile)
+            }
+            val string = "Команда: ${command.joinToString(" ")}"
+            println(string)
+            onLog(string)
+
+            val process = ProcessBuilder(command)
+                .redirectErrorStream(false)
+                .start()
+            currentProcess = process
+            coroutineScope {
+                val stdoutJob = launch {
+                    parseProgressStream(process.inputStream.bufferedReader(), onProgress)
+                }
+                val stderrJob = launch {
+                    process.errorStream.bufferedReader().useLines { lines ->
+                        lines.forEach { line -> if (line.isNotBlank()) onLog("[stderr] $line") }
+                    }
+                }
+                val exitCode = process.waitFor()
+                stdoutJob.join()
+                stderrJob.join()
+                check(exitCode == 0) { "FFmpeg завершился с кодом $exitCode" }
+            }
+            Result.success(outputFile)
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            _isRunning.value = false
+            currentProcess = null
+        }
+    }
+
     /**
      * Конструирует список аргументов FFmpeg.
      *

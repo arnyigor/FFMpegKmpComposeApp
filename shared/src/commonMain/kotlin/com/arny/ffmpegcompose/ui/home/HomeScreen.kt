@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import com.arny.ffmpegcompose.components.home.*
 import com.arny.ffmpegcompose.data.TimeUtils
 import com.arny.ffmpegcompose.data.models.ProcessingPhase
+import com.arny.ffmpegcompose.data.models.SmartVoiceDevice
+import com.arny.ffmpegcompose.data.models.SmartVoiceSeparationModel
 import com.arny.ffmpegcompose.data.models.TrimStrategy
 import com.arny.ffmpegcompose.data.models.WhisperModelOption
 import kotlin.math.roundToLong
@@ -330,7 +332,7 @@ private fun ExtraOptionsSection(state: HomeUiState, callbacks: HomeCallbacks) {
                 LabeledSwitch(
                     "Заменить аудиодорожку",
                     state.replaceAudioSelected,
-                    !state.isProcessing,
+                    !state.isProcessing && !state.smartVoiceReplacementSelected,
                     callbacks::onAddAudioToggled,
                 )
                 if (state.replaceAudioSelected) {
@@ -353,6 +355,91 @@ private fun ExtraOptionsSection(state: HomeUiState, callbacks: HomeCallbacks) {
                     state.audioFile?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
+                }
+
+                LabeledSwitch(
+                    "Умная замена голоса",
+                    state.smartVoiceReplacementSelected,
+                    !state.isProcessing && !state.replaceAudioSelected,
+                    callbacks::onSmartVoiceToggled,
+                )
+                if (state.smartVoiceReplacementSelected) {
+                    Text(
+                        "Demucs разделит оригинальный звук на голос и фон. Операция применяется поверх выбранного режима: прямопотоковое копирование скопирует видео, конвертация перекодирует видео.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(
+                        onClick = callbacks::onSelectAudioFile,
+                        enabled = !state.isProcessing,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.AudioFile, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (state.audioFile == null) "Выбрать новый голос" else "Изменить новый голос")
+                    }
+                    state.audioFile?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    Text("Оригинальный голос: ${state.smartVoiceSettings.originalVoiceVolumePercent}%", style = MaterialTheme.typography.labelMedium)
+                    Slider(
+                        value = state.smartVoiceSettings.originalVoiceVolumePercent.toFloat(),
+                        onValueChange = { callbacks.onOriginalVoiceVolumeChange(it.toInt()) },
+                        valueRange = 0f..100f,
+                        enabled = !state.isProcessing,
+                    )
+                    Text("Новый голос: ${state.smartVoiceSettings.replacementVoiceVolumePercent}%", style = MaterialTheme.typography.labelMedium)
+                    Slider(
+                        value = state.smartVoiceSettings.replacementVoiceVolumePercent.toFloat(),
+                        onValueChange = { callbacks.onReplacementVoiceVolumeChange(it.toInt()) },
+                        valueRange = 0f..200f,
+                        enabled = !state.isProcessing,
+                    )
+                    Text("Модель разделения", style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SmartVoiceSeparationModel.entries.forEach { model ->
+                            FilterChip(
+                                selected = state.smartVoiceSettings.model == model,
+                                onClick = { callbacks.onSmartVoiceModelChange(model) },
+                                label = { Text(model.title) },
+                                enabled = !state.isProcessing,
+                            )
+                        }
+                    }
+                    Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceVariant) {
+                        Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Выбрано: ${state.smartVoiceSettings.model.title}", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                state.smartVoiceSettings.model.hint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                            SmartVoiceSeparationModel.entries.forEach { model ->
+                                Text(
+                                    "• ${model.title}: ${model.hint}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    Text("Обработка Demucs", style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SmartVoiceDevice.entries.forEach { device ->
+                            FilterChip(
+                                selected = state.smartVoiceSettings.device == device,
+                                onClick = { callbacks.onSmartVoiceDeviceChange(device) },
+                                label = { Text(device.title) },
+                                enabled = !state.isProcessing,
+                            )
+                        }
+                    }
+                    Text(
+                        "CUDA быстрее, но при первом выборе скачает большой PyTorch CUDA и требует NVIDIA-драйвер.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -1024,6 +1111,7 @@ private fun ActionBar(state: HomeUiState, callbacks: HomeCallbacks) {
                     when {
                         state.isProcessing -> "Остановить"
                         state.convertType == ConvertType.TRANSCRIBE -> "Распознать речь"
+                        state.smartVoiceReplacementSelected -> "Заменить голос"
                         else -> "Начать обработку"
                     },
                 )
@@ -1036,6 +1124,13 @@ private fun ActionBar(state: HomeUiState, callbacks: HomeCallbacks) {
 private fun LogsPanel(logs: List<LogEntry>, onClear: () -> Unit, modifier: Modifier = Modifier) {
     val listState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
+
+    LaunchedEffect(logs.size) {
+        if (logs.isNotEmpty()) {
+            listState.animateScrollToItem(logs.lastIndex)
+        }
+    }
+
     Card(modifier.padding(12.dp)) {
         Column(Modifier.fillMaxSize()) {
             Row(

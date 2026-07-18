@@ -5,8 +5,10 @@ enum class ProcessingPhase(val title: String) {
     PROBING("Анализ файла"),
     CONVERTING("Обработка FFmpeg"),
     EXTRACTING_AUDIO("Извлечение звука"),
-    LOADING_MODEL("Загрузка модели Whisper"),
+    LOADING_MODEL("Загрузка модели"),
     TRANSCRIBING("Распознавание речи"),
+    SEPARATING_VOICE("Отделение голоса"),
+    MIXING_AUDIO("Сведение звука"),
     EXPORTING("Сохранение результата"),
     COMPLETED("Готово"),
     CANCELLED("Отменено"),
@@ -26,6 +28,37 @@ data class WhisperSettings(
     val language: String = "auto",
     val device: String = "auto",
     val wordTimestamps: Boolean = false,
+)
+
+enum class SmartVoiceDevice(val title: String, val cliName: String?) {
+    AUTO("Авто", null),
+    CPU("CPU", "cpu"),
+    CUDA("CUDA", "cuda"),
+}
+
+enum class SmartVoiceSeparationModel(val title: String, val cliName: String, val hint: String) {
+    HTDEMUCS(
+        "HTDemucs",
+        "htdemucs",
+        "Оптимальный выбор для замены голоса: хорошо сохраняет музыку/фон и достаточно быстро работает на CUDA.",
+    ),
+    HTDEMUCS_FT(
+        "HTDemucs FT",
+        "htdemucs_ft",
+        "Более качественная fine-tuned версия HTDemucs: лучше разделяет сложную музыку, но заметно медленнее.",
+    ),
+    MDX_EXTRA_Q(
+        "MDX Extra Q",
+        "mdx_extra_q",
+        "Быстрее и легче для тестов/слабого ПК; может оставлять больше артефактов и хуже отделять голос.",
+    ),
+}
+
+data class SmartVoiceSettings(
+    val originalVoiceVolumePercent: Int = 15,
+    val replacementVoiceVolumePercent: Int = 100,
+    val device: SmartVoiceDevice = SmartVoiceDevice.AUTO,
+    val model: SmartVoiceSeparationModel = SmartVoiceSeparationModel.HTDEMUCS,
 )
 
 data class ProcessingProgress(

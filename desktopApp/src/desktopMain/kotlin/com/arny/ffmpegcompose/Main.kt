@@ -13,6 +13,7 @@ import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import com.arny.ffmpegcompose.components.home.DefaultHomeComponent
 import com.arny.ffmpegcompose.components.root.DefaultRootComponent
 import com.arny.ffmpegcompose.data.FFmpegExecutor
+import com.arny.ffmpegcompose.data.SmartVoiceExecutor
 import com.arny.ffmpegcompose.data.WhisperExecutor
 import com.arny.ffmpegcompose.data.config.ConfigManager
 import com.arny.ffmpegcompose.data.models.FFmpegManager
@@ -54,13 +55,14 @@ fun main() {
             val json: Json by inject(Json::class.java)
             val ffmpegExecutor: FFmpegExecutor by inject(FFmpegExecutor::class.java)
             val whisperExecutor: WhisperExecutor by inject(WhisperExecutor::class.java)
+            val smartVoiceExecutor: SmartVoiceExecutor by inject(SmartVoiceExecutor::class.java)
 
             val root = DefaultRootComponent(
                 componentContext = DefaultComponentContext(lifecycle),
                 configManager = configManager,
                 ffmpegManager = ffmpegManager,
                 homeComponentFactory = { context ->
-                    DefaultHomeComponent(context, ffmpegExecutor, whisperExecutor)
+                    DefaultHomeComponent(context, ffmpegExecutor, whisperExecutor, smartVoiceExecutor)
                 }
             )
             Window(
@@ -68,6 +70,7 @@ fun main() {
                     ffmpegExecutor.stopPreview()
                     ffmpegExecutor.cancel()
                     whisperExecutor.cancel()
+                    smartVoiceExecutor.cancel()
                     exitApplication()
                 },
                 title = "FFmpeg Media Workshop",
